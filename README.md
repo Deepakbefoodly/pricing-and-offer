@@ -105,42 +105,6 @@ Frontend: the API base URL defaults to `http://localhost:8080`. Override it with
    (any letter case). Reusing it is refused.
 6. **Admin → Report:** totals, units sold and coupon counts, next to the orders they are computed from.
 
-### With curl (bash)
-
-```bash
-API=http://localhost:8080
-JSON='Content-Type: application/json'
-new_cart() { curl -s -X POST $API/carts | sed -E 's/.*"id":"([^"]+)".*/\1/'; }
-
-# Cart and checkout
-CART=$(new_cart)
-curl -s -X POST $API/carts/$CART/items -H "$JSON" -d '{"productId":"shirt","quantity":2}'
-curl -s -i -X POST $API/carts/$CART/checkout -H "$JSON" -H 'Idempotency-Key: demo-1' \
-     -d '{"expectedSubtotal":"50.00"}'                     # 201 Created + order
-
-# Retry with the same key: same order, nothing charged twice
-curl -s -i -X POST $API/carts/$CART/checkout -H "$JSON" -H 'Idempotency-Key: demo-1' \
-     -d '{"expectedSubtotal":"50.00"}'                     # 200 + Idempotent-Replayed: true
-
-# Reach the 5th order, then generate a coupon
-for i in 2 3 4 5; do
-  C=$(new_cart)
-  curl -s -o /dev/null -X POST $API/carts/$C/items -H "$JSON" -d '{"productId":"socks","quantity":1}'
-  curl -s -o /dev/null -X POST $API/carts/$C/checkout -H "$JSON" -H "Idempotency-Key: demo-$i" \
-       -d '{"expectedSubtotal":"5.49"}'
-done
-CODE=$(curl -s -X POST $API/admin/coupons | sed -E 's/.*"code":"([^"]+)".*/\1/')
-
-# Redeem it: 10% off 50.00
-CART=$(new_cart)
-curl -s -X POST $API/carts/$CART/items -H "$JSON" -d '{"productId":"shirt","quantity":2}'
-curl -s -X POST $API/carts/$CART/checkout -H "$JSON" -H 'Idempotency-Key: demo-6' \
-     -d "{\"expectedSubtotal\":\"50.00\",\"couponCode\":\"$CODE\"}"   # discount 5.00, total 45.00
-
-# Report
-curl -s $API/admin/report
-```
-
 ## Frontend scripts
 
 Run from `frontend/`:
