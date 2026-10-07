@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router'
+import { useCart } from '../context/CartContext.ts'
 
 const links = [
   { to: '/products', label: 'Products' },
@@ -7,6 +8,9 @@ const links = [
 ]
 
 export default function Layout() {
+  const { cart } = useCart()
+  const itemCount = cart?.itemCount ?? 0
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="border-b border-slate-200 bg-white">
@@ -22,6 +26,9 @@ export default function Layout() {
                   }
                 >
                   {link.label}
+                  {link.to === '/cart' && itemCount > 0 && (
+                    <span className="ml-1.5 rounded-full bg-emerald-600 px-1.5 text-xs text-white">{itemCount}</span>
+                  )}
                 </NavLink>
               </li>
             ))}

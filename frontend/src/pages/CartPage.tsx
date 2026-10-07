@@ -1,5 +1,162 @@
-import PagePlaceholder from '../components/PagePlaceholder.tsx'
+import { Link } from 'react-router'
+import { ApiError } from '../api.ts'
+import ErrorMessage from '../components/ErrorMessage.tsx'
+import { useCart } from '../context/CartContext.ts'
+import { useToast } from '../context/ToastContext.ts'
+import type { CartItem } from '../types.ts'
 
 export default function CartPage() {
-  return <PagePlaceholder title="Cart" description="Cart management arrives in Slice 2 and checkout in Slice 3." />
+  const { cart, loading, busy, error, setQuantity, removeItem, addItem, refresh } = useCart()
+  const toast = useToast()
+
+  const attempt = async (action: () => Promise<unknown>) => {
+    try {
+      await action()
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e : new ApiError('UNKNOWN', String(e), 0))
+    }
+  }
+
+  if (loading) {
+    return <p className="text-sm text-slate-500">Loading cart…</p>
+  }
+
+  const hasItems = cart !== null && cart.items.length > 0
+  const outOfStock = cart?.items.filter((item) => !item.inStock) ?? []
+
+  return (
+    <section>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Cart</h1>
+        {cart && (
+          <button type="button" onClick={() => void refresh()} className="text-sm text-blue-600 hover:underline">
+            Refresh prices &amp; stock
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="mt-4">
+          <ErrorMessage error={error} />
+        </div>
+      )}
+
+      {!hasItems ? (
+        <p className="mt-4 text-sm text-slate-600">
+          Your cart is empty.{' '}
+          <Link to="/products" className="text-blue-600 hover:underline">
+            Browse products
+          </Link>
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 font-mono text-xs text-slate-500">{cart.id}</p>
+          <table className="mt-4 w-full overflow-hidden rounded border border-slate-200 bg-white text-left text-sm">
+            <thead className="bg-slate-100 text-slate-600">
+              <tr>
+                <th className="px-3 py-2 font-medium">Product</th>
+                <th className="px-3 py-2 text-right font-medium">Unit price</th>
+                <th className="px-3 py-2 text-center font-medium">Quantity</th>
+                <th className="px-3 py-2 text-right font-medium">Line total</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {cart.items.map((item) => (
+                <CartRow
+                  key={item.productId}
+                  item={item}
+                  disabled={busy}
+                  onDecrease={() => attempt(() => setQuantity(item.productId, item.quantity - 1))}
+                  onIncrease={() => attempt(() => addItem(item.productId, 1))}
+                  onRemove={() => attempt(() => removeItem(item.productId))}
+                />
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200 font-medium">
+                <td className="px-3 py-2" colSpan={3}>
+                  Subtotal ({cart.itemCount} {cart.itemCount === 1 ? 'item' : 'items'})
+                </td>
+                <td className="px-3 py-2 text-right font-mono">{cart.subtotal}</td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+
+          {outOfStock.length > 0 && (
+            <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Some items no longer have enough stock. Reduce or remove them before checking out.
+            </p>
+          )}
+
+          <div className="mt-4 flex justify-end">
+            {/* Wired up in Slice 3. */}
+            <button
+              type="button"
+              disabled
+              title="Checkout arrives in Slice 3"
+              className="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Checkout
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+interface RowProps {
+  item: CartItem
+  disabled: boolean
+  onDecrease: () => void
+  onIncrease: () => void
+  onRemove: () => void
+}
+
+function CartRow({ item, disabled, onDecrease, onIncrease, onRemove }: RowProps) {
+  const stepButton = 'h-7 w-7 rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40'
+  return (
+    <tr className={`border-t border-slate-100 ${item.inStock ? '' : 'bg-amber-50'}`}>
+      <td className="px-3 py-2">
+        <div>{item.name}</div>
+        {!item.inStock && (
+          <div className="text-xs text-amber-800">
+            {item.availableQty === 0 ? 'Sold out' : `Only ${item.availableQty} in stock`}
+          </div>
+        )}
+      </td>
+      <td className="px-3 py-2 text-right font-mono">{item.unitPrice}</td>
+      <td className="px-3 py-2">
+        <div className="flex items-center justify-center gap-2">
+          <button
+            type="button"
+            aria-label={`Decrease ${item.name}`}
+            onClick={onDecrease}
+            disabled={disabled || item.quantity <= 1}
+            className={stepButton}
+          >
+            −
+          </button>
+          <span className="w-6 text-center font-mono">{item.quantity}</span>
+          <button
+            type="button"
+            aria-label={`Increase ${item.name}`}
+            onClick={onIncrease}
+            disabled={disabled || item.quantity >= item.availableQty}
+            className={stepButton}
+          >
+            +
+          </button>
+        </div>
+      </td>
+      <td className="px-3 py-2 text-right font-mono">{item.lineTotal}</td>
+      <td className="px-3 py-2 text-right">
+        <button type="button" onClick={onRemove} disabled={disabled} className="text-xs text-red-700 hover:underline disabled:opacity-40">
+          Remove
+        </button>
+      </td>
+    </tr>
+  )
 }

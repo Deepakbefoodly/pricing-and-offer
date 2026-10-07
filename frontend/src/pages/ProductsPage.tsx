@@ -1,9 +1,26 @@
+import { ApiError } from '../api.ts'
 import ErrorMessage from '../components/ErrorMessage.tsx'
 import StockBadge from '../components/StockBadge.tsx'
+import { useCart } from '../context/CartContext.ts'
+import { useToast } from '../context/ToastContext.ts'
 import { useProducts } from '../hooks/useProducts.ts'
+import type { Product } from '../types.ts'
 
 export default function ProductsPage() {
   const { products, loading, error } = useProducts()
+  const { addItem } = useCart()
+  const toast = useToast()
+
+  // Not disabled while another add is in flight: adds are merged server-side, so quick clicks are safe.
+  async function add(product: Product) {
+    try {
+      const cart = await addItem(product.id, 1)
+      const inCart = cart.items.find((item) => item.productId === product.id)?.quantity ?? 1
+      toast.success(`Added ${product.name} (${inCart} in cart)`)
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e : new ApiError('UNKNOWN', String(e), 0))
+    }
+  }
 
   return (
     <section>
@@ -34,11 +51,10 @@ export default function ProductsPage() {
                   <StockBadge qty={product.availableQty} />
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {/* Wired up when carts arrive (Slice 2). */}
                   <button
                     type="button"
-                    disabled
-                    title="Carts arrive in Slice 2"
+                    onClick={() => void add(product)}
+                    disabled={product.availableQty === 0}
                     className="rounded bg-slate-900 px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Add to cart
