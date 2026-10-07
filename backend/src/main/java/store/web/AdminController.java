@@ -12,8 +12,12 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import store.service.CatalogService;
 import store.service.CouponService;
+import store.service.OrderService;
+import store.service.ReportService;
 import store.web.dto.CouponResponse;
+import store.web.dto.OrderResponse;
 import store.web.dto.ProductResponse;
+import store.web.dto.ReportResponse;
 import store.web.dto.UpdateProductRequest;
 
 import java.util.List;
@@ -25,10 +29,14 @@ public class AdminController {
 
     private final CatalogService catalog;
     private final CouponService coupons;
+    private final OrderService orders;
+    private final ReportService reports;
 
-    public AdminController(CatalogService catalog, CouponService coupons) {
+    public AdminController(CatalogService catalog, CouponService coupons, OrderService orders, ReportService reports) {
         this.catalog = catalog;
         this.coupons = coupons;
+        this.orders = orders;
+        this.reports = reports;
     }
 
     @PatchMapping("/products/{productId}")
@@ -47,5 +55,17 @@ public class AdminController {
     @GetMapping("/coupons")
     public List<CouponResponse> listCoupons() {
         return coupons.list().stream().map(CouponResponse::from).toList();
+    }
+
+    /** All placed orders, oldest first, so the report can be reconciled against them. */
+    @GetMapping("/orders")
+    public List<OrderResponse> listOrders() {
+        return orders.list().stream().map(OrderResponse::from).toList();
+    }
+
+    /** Sales summary computed from orders and coupons. Read-only: calling it never changes state. */
+    @GetMapping("/report")
+    public ReportResponse report() {
+        return ReportResponse.from(reports.summary());
     }
 }

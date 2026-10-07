@@ -48,7 +48,7 @@ Configuration:
 | Concurrency | One store-wide read/write lock. Checkout validates everything and calls payment **before** changing any state, so a failure leaves nothing to undo. |
 | Payment | `PaymentGateway` interface with a fake that succeeds by default and can be made to fail in tests. |
 | Coupons | Global bearer code, single use, no expiry, one per order; codes like `REWARD-0005-K7QP` are matched case-insensitively and a blank code means none. Admin generates **one coupon per call** for the oldest unrewarded milestone (`placedOrders ≥ (generated + 1) × n`); x is fixed on the coupon when generated. Orders that used a coupon still count toward milestones. The coupon is checked before payment and redeemed only in the commit step, so a failed checkout never consumes it. A 100% coupon makes the total 0.00 and skips the payment call. |
-| Report | Computed from orders and coupons (no separate counters), under the read lock, so it reconciles and never changes state. |
+| Report | Computed from orders and coupons (no separate counters), under the read lock, so it reconciles and never changes state. `GET /admin/orders` exposes the orders it is computed from. |
 | Errors | `{ "code", "message", "details" }` with stable codes (table in §4). |
 | Admin edits | Price/stock edits carry the product `version` the admin loaded (optimistic check); a stale version → `409 PRODUCT_MODIFIED`, so an edit never overwrites a concurrent sale. Stock is set as an absolute value. |
 | Input strictness | Unknown JSON fields, wrong types (`"5"` for a number) and fractions for integers (`1.5`) → `400` with the field named. |
@@ -171,9 +171,10 @@ Checkout with a coupon: `{ "expectedSubtotal": "448.00", "couponCode": "REWARD-0
 Errors: 404 `COUPON_NOT_FOUND` · 409 `COUPON_ALREADY_REDEEMED`
 
 ### Slice 6: Report
-- **Service:** derived from orders and coupons under the read lock
-- **Tests:** reconciles with orders and coupons; repeated calls return the same result and change no state; consistent while checkouts run concurrently
-- **Screen:** Admin → Report (summary cards + quantity table, Refresh button)
+- **Service:** derived from orders and coupons under the read lock (no separate counters). Gross / discounts / net are sums of order `subtotal` / `discount` / `total`, i.e. at the prices actually paid; `quantityByProduct` lists only products that were sold, sorted by name.
+- **Also:** `GET /admin/orders` (all orders, oldest first) so the report can be reconciled through the API, as the task requires.
+- **Tests:** reconciles with orders and coupons (including failed checkouts leaving no trace); repeated calls return the same result and change no state; **a report waits for an in-progress write** (deterministic lock test); a reader taking reports during 20 concurrent coupon checkouts always sees a consistent snapshot
+- **Screen:** Admin → Report (summary cards, units-sold table and the orders it is computed from, Refresh button)
 
 `GET /admin/report` *(admin)* → 200
 ```json
@@ -184,6 +185,7 @@ Errors: 404 `COUPON_NOT_FOUND` · 409 `COUPON_ALREADY_REDEEMED`
   "coupons": { "generated": 2, "available": 1, "redeemed": 1 }
 }
 ```
+`GET /admin/orders` *(admin)* → 200, array of order bodies (as in Slice 3), oldest first
 
 ### Slice 7: Docs & hardening
 - `README.md` (setup, run, config, time spent)

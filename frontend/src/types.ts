@@ -53,6 +53,16 @@ export interface Coupon {
   redeemedAt: string | null
 }
 
+export interface SalesReport {
+  totalOrders: number
+  /** Only products that were actually sold. */
+  quantityByProduct: { productId: string; name: string; quantity: number }[]
+  grossRevenue: Money
+  totalDiscounts: Money
+  netRevenue: Money
+  coupons: { generated: number; available: number; redeemed: number }
+}
+
 export interface Cart {
   id: string
   status: 'OPEN' | 'CHECKED_OUT'
