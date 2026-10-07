@@ -8,6 +8,7 @@ import ToastProvider from './components/ToastProvider.tsx'
 import AdminPage from './pages/AdminPage.tsx'
 import CartPage from './pages/CartPage.tsx'
 import NotFoundPage from './pages/NotFoundPage.tsx'
+import OrderPage from './pages/OrderPage.tsx'
 import ProductsPage from './pages/ProductsPage.tsx'
 
 const router = createBrowserRouter([
@@ -17,6 +18,7 @@ const router = createBrowserRouter([
       { index: true, element: <Navigate to="/products" replace /> },
       { path: 'products', element: <ProductsPage /> },
       { path: 'cart', element: <CartPage /> },
+      { path: 'orders/:orderId', element: <OrderPage /> },
       { path: 'admin', element: <AdminPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ApiError } from '../api.ts'
 import { addCartItem, createCart, getCart, removeCartItem, setCartItemQuantity } from '../cartApi.ts'
 import { CartContext, type CartApi } from '../context/CartContext.ts'
-import type { Cart } from '../types.ts'
+import { checkoutCart } from '../ordersApi.ts'
+import type { Cart, Order } from '../types.ts'
 
 const STORAGE_KEY = 'cartId'
 
@@ -26,11 +27,18 @@ function storeCartId(cartId: string | null) {
   }
 }
 
-const isMissingCart = (e: unknown) => e instanceof ApiError && e.code === 'CART_NOT_FOUND'
+/**
+ * The stored cart can no longer be shopped with: the backend forgot it (in-memory restart) or it was
+ * already checked out (e.g. in another tab). Either way the next "Add to cart" should start a new cart.
+ */
+const isUnusableCart = (e: unknown) => e instanceof ApiError && (e.code === 'CART_NOT_FOUND' || e.code === 'CART_NOT_OPEN')
+
+/** Checkout failures that mean the cart on screen is out of date; reload it so the customer sees why. */
+const isStaleView = (e: unknown) => e instanceof ApiError && (e.code === 'PRICE_CHANGED' || e.code === 'INSUFFICIENT_STOCK')
 
 /**
- * Holds the shopper's cart for every page. The cart ID survives reloads via localStorage;
- * the backend is in-memory, so a stored ID can go stale after a restart and is then dropped.
+ * Holds the shopper's cart for every page. The cart ID survives reloads via localStorage and is dropped
+ * once it stops being usable (unknown to the backend, or checked out).
  */
 export default function CartProvider({ children }: { children: ReactNode }) {
   const [cart, setCart] = useState<Cart | null>(null)
@@ -53,10 +61,11 @@ export default function CartProvider({ children }: { children: ReactNode }) {
       return
     }
     try {
-      adopt(await getCart(cartId))
+      const loaded = await getCart(cartId)
+      adopt(loaded.status === 'OPEN' ? loaded : null)
       setError(null)
     } catch (e) {
-      if (isMissingCart(e)) {
+      if (isUnusableCart(e)) {
         adopt(null)
       } else {
         setError(e instanceof ApiError ? e : new ApiError('UNKNOWN', String(e), 0))
@@ -98,14 +107,14 @@ export default function CartProvider({ children }: { children: ReactNode }) {
           adopt(updated)
           return updated
         } catch (e) {
-          if (!isMissingCart(e)) {
+          if (!isUnusableCart(e)) {
             throw e
           }
           adopt(null)
           if (!createIfMissing) {
             throw e
           }
-          // The stored cart vanished (backend restart): start a new one and retry once.
+          // The stored cart vanished or was checked out elsewhere: start a new one and retry once.
           const updated = await request(await ensureCartId())
           adopt(updated)
           return updated
@@ -115,6 +124,31 @@ export default function CartProvider({ children }: { children: ReactNode }) {
       }
     },
     [adopt, ensureCartId],
+  )
+
+  const checkout = useCallback(
+    async (expectedSubtotal: string): Promise<Order> => {
+      const cartId = cartIdRef.current
+      if (!cartId) {
+        throw new ApiError('CART_NOT_FOUND', 'There is no cart to check out', 404)
+      }
+      setInFlight((n) => n + 1)
+      try {
+        const order = await checkoutCart(cartId, expectedSubtotal)
+        adopt(null) // the cart is closed; the next "Add to cart" starts a new one
+        return order
+      } catch (e) {
+        if (isUnusableCart(e)) {
+          adopt(null)
+        } else if (isStaleView(e)) {
+          await load()
+        }
+        throw e
+      } finally {
+        setInFlight((n) => n - 1)
+      }
+    },
+    [adopt, load],
   )
 
   const api = useMemo<CartApi>(
@@ -127,8 +161,9 @@ export default function CartProvider({ children }: { children: ReactNode }) {
       setQuantity: (productId, quantity) => run((id) => setCartItemQuantity(id, productId, quantity), false),
       removeItem: (productId) => run((id) => removeCartItem(id, productId), false),
       refresh: load,
+      checkout,
     }),
-    [cart, loading, inFlight, error, run, load],
+    [cart, loading, inFlight, error, run, load, checkout],
   )
 
   return <CartContext.Provider value={api}>{children}</CartContext.Provider>

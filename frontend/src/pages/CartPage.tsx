@@ -1,19 +1,42 @@
-import { Link } from 'react-router'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router'
 import { ApiError } from '../api.ts'
 import ErrorMessage from '../components/ErrorMessage.tsx'
 import { useCart } from '../context/CartContext.ts'
 import { useToast } from '../context/ToastContext.ts'
 import type { CartItem } from '../types.ts'
 
+const toApiError = (e: unknown) => (e instanceof ApiError ? e : new ApiError('UNKNOWN', String(e), 0))
+
 export default function CartPage() {
-  const { cart, loading, busy, error, setQuantity, removeItem, addItem, refresh } = useCart()
+  const { cart, loading, busy, error, setQuantity, removeItem, addItem, refresh, checkout } = useCart()
   const toast = useToast()
+  const navigate = useNavigate()
+  // Why the last checkout was refused when the customer has to act on it (new prices, too little stock).
+  const [checkoutProblem, setCheckoutProblem] = useState<ApiError | null>(null)
 
   const attempt = async (action: () => Promise<unknown>) => {
+    setCheckoutProblem(null)
     try {
       await action()
     } catch (e) {
-      toast.error(e instanceof ApiError ? e : new ApiError('UNKNOWN', String(e), 0))
+      toast.error(toApiError(e))
+    }
+  }
+
+  async function placeOrder(expectedSubtotal: string) {
+    setCheckoutProblem(null)
+    try {
+      const order = await checkout(expectedSubtotal)
+      toast.success(`Order #${order.orderNumber} placed`)
+      navigate(`/orders/${order.id}`)
+    } catch (e) {
+      const apiError = toApiError(e)
+      if (apiError.code === 'PRICE_CHANGED' || apiError.code === 'INSUFFICIENT_STOCK') {
+        setCheckoutProblem(apiError) // the cart has been reloaded with current prices and stock
+      } else {
+        toast.error(apiError)
+      }
     }
   }
 
@@ -90,15 +113,31 @@ export default function CartPage() {
             </p>
           )}
 
-          <div className="mt-4 flex justify-end">
-            {/* Wired up in Slice 3. */}
+          {checkoutProblem?.code === 'PRICE_CHANGED' && (
+            <div role="alert" className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Prices changed since you opened the cart: the subtotal was{' '}
+              <span className="font-mono">{String(checkoutProblem.details.expectedSubtotal)}</span> and is now{' '}
+              <span className="font-mono">{String(checkoutProblem.details.currentSubtotal)}</span>. You have not been charged.
+              Review the cart above and press Checkout again to pay the new total.
+            </div>
+          )}
+          {checkoutProblem?.code === 'INSUFFICIENT_STOCK' && (
+            <div className="mt-3">
+              <ErrorMessage error={checkoutProblem} />
+            </div>
+          )}
+
+          <div className="mt-4 flex items-center justify-end gap-3">
+            <span className="text-sm text-slate-600">
+              You pay <span className="font-mono font-medium text-slate-900">{cart.subtotal}</span>
+            </span>
             <button
               type="button"
-              disabled
-              title="Checkout arrives in Slice 3"
+              onClick={() => void placeOrder(cart.subtotal)}
+              disabled={busy || outOfStock.length > 0}
               className="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Checkout
+              {busy ? 'Working…' : 'Checkout'}
             </button>
           </div>
         </>
