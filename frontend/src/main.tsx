@@ -2,7 +2,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router'
 import './index.css'
+import CartProvider from './components/CartProvider.tsx'
 import Layout from './components/Layout.tsx'
+import ToastProvider from './components/ToastProvider.tsx'
 import AdminPage from './pages/AdminPage.tsx'
 import CartPage from './pages/CartPage.tsx'
 import NotFoundPage from './pages/NotFoundPage.tsx'
@@ -23,6 +25,10 @@ const router = createBrowserRouter([
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <ToastProvider>
+      <CartProvider>
+        <RouterProvider router={router} />
+      </CartProvider>
+    </ToastProvider>
   </StrictMode>,
 )

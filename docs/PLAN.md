@@ -43,7 +43,7 @@ Configuration:
 |---|---|
 | Money | `BigDecimal`, scale 2, sent in JSON as **strings** (`"25.00"`) in both directions; a JSON number for a money field → `400`, more than 2 decimals → `400` (never rounded silently). Discount = subtotal × x / 100, rounded HALF_UP to cents and capped at the subtotal, so a total is never negative (0.00 allowed). |
 | Price change after add-to-cart | Checkout charges the **current** price. The client sends `expectedSubtotal`; a mismatch → `409 PRICE_CHANGED`. |
-| Stock | Not reserved in the cart. Adding more than is available → `409 INSUFFICIENT_STOCK`. Checkout re-checks all lines and rejects the whole order on any shortage. |
+| Stock | Not reserved in the cart. Raising a line above available stock → `409 INSUFFICIENT_STOCK`; lowering a line is always allowed (so a line that went out of stock can be reduced). Checkout re-checks all lines and rejects the whole order on any shortage. |
 | Checkout retries | `Idempotency-Key` header is **required**. Same key + same body → replays the original order (200). Same key + different body → `422`. New key on a checked-out cart → `409 CART_ALREADY_CHECKED_OUT`. Only successful checkouts are recorded. |
 | Concurrency | One store-wide read/write lock. Checkout validates everything and calls payment **before** changing any state, so a failure leaves nothing to undo. |
 | Payment | `PaymentGateway` interface with a fake that succeeds by default and can be made to fail in tests. |
@@ -81,13 +81,13 @@ Each slice adds: entity → repository → service → controller → tests → 
 
 ### Slice 2: Carts
 - **Entity:** `Cart { id, status: OPEN|CHECKED_OUT, items (insertion-ordered), orderId? }`
-- **Service:** create, view (priced at current prices), add / set qty / remove. The cart must be OPEN, the product must exist, and quantity is 1–99 and ≤ available stock.
-- **Tests:** invalid product or qty never enters the cart; adding merges quantities; concurrent adds to one cart sum correctly
-- **Screen:** Cart page (cart ID kept in localStorage, +/- and remove controls, subtotal, out-of-stock rows highlighted, error toasts)
+- **Service:** create, view (priced at current prices), add / set qty / remove, all under the store lock. The cart must be OPEN and the product must exist; quantity is 1–99 per request and the merged line is capped at 99; a line may not be raised above available stock (reductions always allowed).
+- **Tests:** invalid product or qty never enters the cart; adding merges quantities; **20 concurrent adds to one cart sum correctly; 10 concurrent adds against stock 3 → exactly 3 succeed**
+- **Screen:** Cart page (cart ID kept in localStorage and dropped/recreated if the backend no longer knows it, +/- and remove controls, subtotal, out-of-stock rows highlighted, error toasts); "Add to cart" on Products; cart count in the nav
 
-`POST /carts` → 201
+`POST /carts` → 201, `Location: /carts/{id}`
 ```json
-{ "id": "cart_8f2c", "status": "OPEN", "items": [], "subtotal": "0.00", "orderId": null }
+{ "id": "cart_8f2c…", "status": "OPEN", "orderId": null, "items": [], "itemCount": 0, "subtotal": "0.00" }
 ```
 `GET /carts/{id}` → 200
 ```json
@@ -95,13 +95,13 @@ Each slice adds: entity → repository → service → controller → tests → 
   "id": "cart_8f2c", "status": "OPEN", "orderId": null,
   "items": [{ "productId": "shirt", "name": "Shirt", "unitPrice": "25.00", "quantity": 2,
               "lineTotal": "50.00", "availableQty": 100, "inStock": true }],
-  "subtotal": "50.00"
+  "itemCount": 2, "subtotal": "50.00"
 }
 ```
-`POST /carts/{id}/items` `{ "productId": "shirt", "quantity": 2 }` → 200 cart
+`POST /carts/{id}/items` `{ "productId": "shirt", "quantity": 2 }` → 200 cart (adds to any existing quantity)
 `PUT /carts/{id}/items/{productId}` `{ "quantity": 3 }` → 200 cart
 `DELETE /carts/{id}/items/{productId}` → 200 cart
-Errors: 404 `CART_NOT_FOUND` / `PRODUCT_NOT_FOUND` · 400 `VALIDATION_ERROR` · 409 `INSUFFICIENT_STOCK` · 409 `CART_NOT_OPEN`
+Errors: 404 `CART_NOT_FOUND` / `PRODUCT_NOT_FOUND` / `CART_ITEM_NOT_FOUND` (PUT/DELETE of a product not in the cart) · 400 `VALIDATION_ERROR` · 409 `INSUFFICIENT_STOCK` (details: `shortages[]`) · 409 `CART_NOT_OPEN`
 
 ### Slice 3: Checkout & orders
 - **Entity:** `Order { id, orderNumber, cartId, lines[], subtotal, discount, total, coupon?, placedAt }`; `OrderLine { productId, name, unitPrice, quantity, lineTotal }` (a snapshot)
@@ -193,7 +193,7 @@ Errors: 404 `COUPON_NOT_FOUND` · 409 `COUPON_ALREADY_REDEEMED`
 |---|---|
 | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_MISSING` | 400 |
 | `PAYMENT_FAILED` | 402 |
-| `NOT_FOUND` (unknown route), `PRODUCT_NOT_FOUND`, `CART_NOT_FOUND`, `ORDER_NOT_FOUND`, `COUPON_NOT_FOUND` | 404 |
+| `NOT_FOUND` (unknown route), `PRODUCT_NOT_FOUND`, `CART_NOT_FOUND`, `CART_ITEM_NOT_FOUND`, `ORDER_NOT_FOUND`, `COUPON_NOT_FOUND` | 404 |
 | `METHOD_NOT_ALLOWED` | 405 |
 | `PRODUCT_MODIFIED`, `CART_NOT_OPEN`, `CART_ALREADY_CHECKED_OUT`, `INSUFFICIENT_STOCK`, `PRICE_CHANGED`, `COUPON_ALREADY_REDEEMED`, `NO_ELIGIBLE_MILESTONE` | 409 |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 |

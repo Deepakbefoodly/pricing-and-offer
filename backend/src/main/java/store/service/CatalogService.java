@@ -66,7 +66,8 @@ public class CatalogService {
         });
     }
 
-    private Product require(String productId) {
+    /** Looks up a product or fails with PRODUCT_NOT_FOUND. The caller must hold the store lock. */
+    Product require(String productId) {
         return products.findById(productId)
                 .orElseThrow(() -> new ApiException(ErrorCode.PRODUCT_NOT_FOUND, "Product not found: " + productId,
                         Map.of("productId", productId)));

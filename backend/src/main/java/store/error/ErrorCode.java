@@ -16,6 +16,7 @@ public enum ErrorCode {
     NOT_FOUND(HttpStatus.NOT_FOUND),
     PRODUCT_NOT_FOUND(HttpStatus.NOT_FOUND),
     CART_NOT_FOUND(HttpStatus.NOT_FOUND),
+    CART_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND),
     ORDER_NOT_FOUND(HttpStatus.NOT_FOUND),
     COUPON_NOT_FOUND(HttpStatus.NOT_FOUND),
 
