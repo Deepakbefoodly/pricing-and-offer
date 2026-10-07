@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { ApiError } from '../api.ts'
-import type { Cart } from '../types.ts'
+import type { Cart, Money, Order } from '../types.ts'
 
 export interface CartApi {
   /** Null until the first item is added (or after the stored cart disappeared, e.g. a backend restart). */
@@ -15,6 +15,11 @@ export interface CartApi {
   removeItem: (productId: string) => Promise<Cart>
   /** Re-reads the cart so prices and stock reflect the current catalogue. */
   refresh: () => Promise<void>
+  /**
+   * Places the order for the subtotal the customer saw. On success the cart is cleared. On PRICE_CHANGED or
+   * INSUFFICIENT_STOCK the cart is reloaded (so the screen shows the new prices / stock) and the error rethrown.
+   */
+  checkout: (expectedSubtotal: Money) => Promise<Order>
 }
 
 export const CartContext = createContext<CartApi | null>(null)

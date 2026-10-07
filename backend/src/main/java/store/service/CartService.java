@@ -94,7 +94,8 @@ public class CartService {
                         Map.of("cartId", cartId)));
     }
 
-    private Cart requireOpenCart(String cartId) {
+    /** Looks up a cart that can still change, or fails with CART_NOT_FOUND / CART_NOT_OPEN. Caller holds the lock. */
+    Cart requireOpenCart(String cartId) {
         Cart cart = requireCart(cartId);
         if (!cart.isOpen()) {
             Map<String, Object> details = new HashMap<>(Map.of("cartId", cartId, "status", cart.status()));

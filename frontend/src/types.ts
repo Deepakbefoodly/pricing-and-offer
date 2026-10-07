@@ -21,6 +21,27 @@ export interface CartItem {
   inStock: boolean
 }
 
+export interface OrderLine {
+  productId: string
+  name: string
+  /** Price at the moment of purchase; later catalogue changes never alter it. */
+  unitPrice: Money
+  quantity: number
+  lineTotal: Money
+}
+
+export interface Order {
+  id: string
+  orderNumber: number
+  cartId: string
+  lines: OrderLine[]
+  subtotal: Money
+  coupon: { code: string; percentOff: number } | null
+  discount: Money
+  total: Money
+  placedAt: string
+}
+
 export interface Cart {
   id: string
   status: 'OPEN' | 'CHECKED_OUT'

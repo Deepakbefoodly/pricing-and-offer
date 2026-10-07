@@ -105,13 +105,14 @@ Errors: 404 `CART_NOT_FOUND` / `PRODUCT_NOT_FOUND` / `CART_ITEM_NOT_FOUND` (PUT/
 
 ### Slice 3: Checkout & orders
 - **Entity:** `Order { id, orderNumber, cartId, lines[], subtotal, discount, total, coupon?, placedAt }`; `OrderLine { productId, name, unitPrice, quantity, lineTotal }` (a snapshot)
-- **Service:** under the write lock: cart OPEN and not empty → price the lines → compare `expectedSubtotal` → check stock → charge payment → **commit** (decrement stock, save the order, mark the cart CHECKED_OUT)
+- **Service:** under the write lock: cart OPEN and not empty → price the lines → check stock (all short lines reported) → compare `expectedSubtotal` → charge payment → **commit** (decrement stock, save the order, mark the cart CHECKED_OUT). Stock is checked before price so a customer isn't asked to confirm a new price for an order that would fail anyway. Nothing changes before the commit, so every failure leaves stock, cart and orders untouched.
 - **Tests:**
   - **20 concurrent checkouts for a watch with stock 3** → exactly 3 orders, stock ends at 0
+  - **The same cart checked out 10× at once** → exactly 1 order, charged once (the rest get `CART_NOT_OPEN`; proper retry replay comes in Slice 4)
   - The order is unchanged after a later price change
-  - `PRICE_CHANGED`
-  - Payment failure leaves stock and cart untouched
-- **Screens:** Checkout button on the Cart page (confirm dialog on `PRICE_CHANGED`); Order page
+  - `PRICE_CHANGED`, then success at the new subtotal
+  - Payment failure leaves stock, cart and orders untouched, and checkout can be retried
+- **Screens:** Checkout button on the Cart page (on `PRICE_CHANGED` the cart reloads and an inline notice shows old vs new subtotal; pressing Checkout again confirms; on `INSUFFICIENT_STOCK` the short lines are highlighted and Checkout stays disabled until fixed); Order page
 
 `POST /carts/{id}/checkout` `{ "expectedSubtotal": "50.00" }` → 201
 ```json
@@ -123,7 +124,7 @@ Errors: 404 `CART_NOT_FOUND` / `PRODUCT_NOT_FOUND` / `CART_ITEM_NOT_FOUND` (PUT/
 }
 ```
 `GET /orders/{id}` → 200 order · 404 `ORDER_NOT_FOUND`
-Checkout errors: 409 `CART_NOT_OPEN` · 422 `CART_EMPTY` · 409 `PRICE_CHANGED` (details: expected vs current) · 409 `INSUFFICIENT_STOCK` (details: shortages) · 402 `PAYMENT_FAILED`
+Checkout errors: 404 `CART_NOT_FOUND` · 400 `VALIDATION_ERROR` (missing / malformed `expectedSubtotal`) · 409 `CART_NOT_OPEN` (details: `orderId`) · 422 `CART_EMPTY` · 409 `PRICE_CHANGED` (details: expected vs current) · 409 `INSUFFICIENT_STOCK` (details: shortages) · 402 `PAYMENT_FAILED`
 
 ### Slice 4: Idempotent retries
 - **Entity:** `IdempotencyRecord { key, fingerprint(cartId, couponCode, expectedSubtotal), orderId }`
