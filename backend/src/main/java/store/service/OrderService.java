@@ -6,6 +6,7 @@ import store.error.ApiException;
 import store.error.ErrorCode;
 import store.repository.OrderRepository;
 
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -17,6 +18,11 @@ public class OrderService {
     public OrderService(OrderRepository orders, StoreLock lock) {
         this.orders = orders;
         this.lock = lock;
+    }
+
+    /** All placed orders, oldest first; the report can be reconciled against this list. */
+    public List<Order> list() {
+        return lock.read(orders::findAll);
     }
 
     public Order get(String orderId) {
