@@ -20,7 +20,7 @@ export interface CartApi {
    * Places the order for the subtotal the customer saw. On success the cart is cleared. On PRICE_CHANGED or
    * INSUFFICIENT_STOCK the cart is reloaded (so the screen shows the new prices / stock) and the error rethrown.
    */
-  checkout: (expectedSubtotal: Money) => Promise<CheckoutOutcome>
+  checkout: (expectedSubtotal: Money, couponCode?: string) => Promise<CheckoutOutcome>
 }
 
 export interface CheckoutOutcome {

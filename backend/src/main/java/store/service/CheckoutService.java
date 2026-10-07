@@ -1,7 +1,9 @@
 package store.service;
 
 import org.springframework.stereotype.Service;
+import store.domain.AppliedCoupon;
 import store.domain.Cart;
+import store.domain.Coupon;
 import store.domain.IdempotencyRecord;
 import store.domain.Money;
 import store.domain.Order;
@@ -50,17 +52,20 @@ public class CheckoutService {
     private final ProductRepository products;
     private final OrderRepository orders;
     private final IdempotencyStore idempotency;
+    private final CouponService coupons;
     private final PaymentGateway payments;
     private final StoreLock lock;
     private final Clock clock;
 
     public CheckoutService(CartService carts, CatalogService catalog, ProductRepository products, OrderRepository orders,
-                           IdempotencyStore idempotency, PaymentGateway payments, StoreLock lock, Clock clock) {
+                           IdempotencyStore idempotency, CouponService coupons, PaymentGateway payments, StoreLock lock,
+                           Clock clock) {
         this.carts = carts;
         this.catalog = catalog;
         this.products = products;
         this.orders = orders;
         this.idempotency = idempotency;
+        this.coupons = coupons;
         this.payments = payments;
         this.lock = lock;
         this.clock = clock;
@@ -79,16 +84,19 @@ public class CheckoutService {
      * with the same key.
      *
      * @param idempotencyKey   client-chosen key identifying this checkout attempt across retries
-     * @param expectedSubtotal the subtotal the customer was shown; checkout refuses to charge a different amount
+     * @param expectedSubtotal the subtotal the customer was shown (before any coupon); checkout refuses to charge
+     *                         on a different subtotal
+     * @param couponCode       optional reward coupon; matched case-insensitively, blank means none
      */
-    public Result checkout(String cartId, String idempotencyKey, String expectedSubtotal) {
+    public Result checkout(String cartId, String idempotencyKey, String expectedSubtotal, String couponCode) {
         String key = requireValidKey(idempotencyKey);
         BigDecimal expected = Money.parse(expectedSubtotal, "expectedSubtotal");
+        String code = CouponService.normalize(couponCode);
         return lock.write(() -> {
             // 0. A retry of a request that already succeeded gets the original order back, whatever changed since.
             Optional<IdempotencyRecord> previous = idempotency.find(key);
             if (previous.isPresent()) {
-                if (!previous.get().matches(cartId, expected)) {
+                if (!previous.get().matches(cartId, expected, code)) {
                     // No details: echoing the earlier request would hand its cart ID to whoever presents the key.
                     throw new ApiException(ErrorCode.IDEMPOTENCY_KEY_REUSED,
                             "Idempotency-Key was already used for a different checkout request; use a new key for a new attempt");
@@ -115,7 +123,10 @@ public class CheckoutService {
                         Map.of("expectedSubtotal", Money.format(expected), "currentSubtotal", Money.format(priced.subtotal())));
             }
 
-            BigDecimal discount = BigDecimal.ZERO.setScale(Money.SCALE);
+            // Checked inside the lock and only redeemed in the commit step: a coupon cannot be used by two
+            // concurrent checkouts, and a checkout that fails below never consumes it.
+            Coupon coupon = code == null ? null : coupons.requireAvailable(code);
+            BigDecimal discount = coupon == null ? BigDecimal.ZERO.setScale(Money.SCALE) : coupon.discountOn(priced.subtotal());
             BigDecimal total = priced.subtotal().subtract(discount);
             Order order = new Order(
                     "ord_" + UUID.randomUUID().toString().replace("-", ""),
@@ -123,13 +134,16 @@ public class CheckoutService {
                     cartId,
                     priced.lines().stream().map(CheckoutService::snapshot).toList(),
                     priced.subtotal(),
-                    null,
+                    coupon == null ? null : new AppliedCoupon(coupon.code(), coupon.percentOff()),
                     discount,
                     total,
                     Instant.now(clock));
 
             try {
-                payments.charge(order.id(), order.total());
+                // A 100% coupon makes the total 0.00: nothing to charge (real providers reject zero-amount charges).
+                if (order.total().signum() > 0) {
+                    payments.charge(order.id(), order.total());
+                }
             } catch (PaymentDeclinedException e) {
                 throw new ApiException(ErrorCode.PAYMENT_FAILED, "Payment was declined: " + e.getMessage(),
                         Map.of("reason", e.getMessage()));
@@ -140,9 +154,12 @@ public class CheckoutService {
                 Product product = catalog.require(line.productId());
                 products.replace(product.withPriceAndStock(product.unitPrice(), product.availableQty() - line.quantity()));
             }
+            if (coupon != null) {
+                coupons.redeem(coupon, order.id());
+            }
             orders.add(order);
             cart.markCheckedOut(order.id());
-            idempotency.add(new IdempotencyRecord(key, cartId, expected, order.id(), order.placedAt()));
+            idempotency.add(new IdempotencyRecord(key, cartId, expected, code, order.id(), order.placedAt()));
             return new Result(order, false);
         });
     }

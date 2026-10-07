@@ -150,18 +150,18 @@ export default function CartProvider({ children }: { children: ReactNode }) {
   )
 
   const checkout = useCallback(
-    async (expectedSubtotal: string): Promise<CheckoutOutcome> => {
+    async (expectedSubtotal: string, couponCode?: string): Promise<CheckoutOutcome> => {
       const cartId = cartIdRef.current
       if (!cartId) {
         throw new ApiError('CART_NOT_FOUND', 'There is no cart to check out', 404)
       }
       // One key per checkout attempt: pressing Checkout again for the same cart and amount (e.g. after a
-      // network error) reuses it, so the server can recognise the retry. A new amount is a new attempt.
+      // network error) reuses it, so the server can recognise the retry. A new amount or coupon is a new attempt.
       const previous = attemptRef.current
       const request: CheckoutRequest =
-        previous && previous.cartId === cartId && previous.expectedSubtotal === expectedSubtotal
+        previous && previous.cartId === cartId && previous.expectedSubtotal === expectedSubtotal && previous.couponCode === couponCode
           ? previous
-          : { cartId, expectedSubtotal, idempotencyKey: crypto.randomUUID() }
+          : { cartId, expectedSubtotal, couponCode, idempotencyKey: crypto.randomUUID() }
       attemptRef.current = request
       setInFlight((n) => n + 1)
       try {

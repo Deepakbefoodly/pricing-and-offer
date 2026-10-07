@@ -38,7 +38,7 @@ public class OrderController {
     public ResponseEntity<OrderResponse> checkout(@PathVariable String cartId,
                                                   @RequestHeader(name = IDEMPOTENCY_KEY, required = false) String idempotencyKey,
                                                   @Valid @RequestBody CheckoutRequest request) {
-        CheckoutService.Result result = checkout.checkout(cartId, idempotencyKey, request.expectedSubtotal());
+        CheckoutService.Result result = checkout.checkout(cartId, idempotencyKey, request.expectedSubtotal(), request.couponCode());
         OrderResponse order = OrderResponse.from(result.order());
         if (result.replayed()) {
             return ResponseEntity.ok().header(REPLAYED, "true").body(order);

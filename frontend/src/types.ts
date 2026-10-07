@@ -42,6 +42,17 @@ export interface Order {
   placedAt: string
 }
 
+export interface Coupon {
+  code: string
+  percentOff: number
+  /** The placed-order count this coupon rewards (n, 2n, 3n, …). */
+  milestoneOrderNumber: number
+  status: 'AVAILABLE' | 'REDEEMED'
+  generatedAt: string
+  redeemedByOrderId: string | null
+  redeemedAt: string | null
+}
+
 export interface Cart {
   id: string
   status: 'OPEN' | 'CHECKED_OUT'

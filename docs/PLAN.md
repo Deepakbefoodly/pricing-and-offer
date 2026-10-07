@@ -47,7 +47,7 @@ Configuration:
 | Checkout retries | `Idempotency-Key` header is **required** (1–100 printable ASCII, no spaces; keys are global, kept for the process lifetime). Same key + same request (cart, subtotal compared by value) → replays the original order (200, `Idempotent-Replayed: true`), even if prices or stock changed since. Same key + different request → `422` (no details, so another request's cart ID never leaks). New key on a checked-out cart → `409 CART_ALREADY_CHECKED_OUT`. Only successful checkouts are recorded, so a failed attempt can be retried with the same key. |
 | Concurrency | One store-wide read/write lock. Checkout validates everything and calls payment **before** changing any state, so a failure leaves nothing to undo. |
 | Payment | `PaymentGateway` interface with a fake that succeeds by default and can be made to fail in tests. |
-| Coupons | Global bearer code, single use, no expiry, one per order. Admin generates **one coupon per call** for the oldest unrewarded milestone (`placedOrders ≥ (generated + 1) × n`). Orders that used a coupon still count toward milestones. |
+| Coupons | Global bearer code, single use, no expiry, one per order; codes like `REWARD-0005-K7QP` are matched case-insensitively and a blank code means none. Admin generates **one coupon per call** for the oldest unrewarded milestone (`placedOrders ≥ (generated + 1) × n`); x is fixed on the coupon when generated. Orders that used a coupon still count toward milestones. The coupon is checked before payment and redeemed only in the commit step, so a failed checkout never consumes it. A 100% coupon makes the total 0.00 and skips the payment call. |
 | Report | Computed from orders and coupons (no separate counters), under the read lock, so it reconciles and never changes state. |
 | Errors | `{ "code", "message", "details" }` with stable codes (table in §4). |
 | Admin edits | Price/stock edits carry the product `version` the admin loaded (optimistic check); a stale version → `409 PRODUCT_MODIFIED`, so an edit never overwrites a concurrent sale. Stock is set as an absolute value. |
@@ -146,21 +146,22 @@ Checkout errors: 404 `CART_NOT_FOUND` · 400 `VALIDATION_ERROR` (missing / malfo
   ```
 
 ### Slice 5: Coupons
-- **Entity:** `Coupon { code, percentOff, milestoneOrderNumber, status: AVAILABLE|REDEEMED, generatedAt, redeemedByOrderId? }`
+- **Entity:** `Coupon { code, percentOff, milestoneOrderNumber, status: AVAILABLE|REDEEMED, generatedAt, redeemedByOrderId?, redeemedAt? }` (immutable; `discountOn(subtotal)` holds the rounding rule)
 - **Service:**
   - Generate: one coupon, oldest milestone, under the write lock.
-  - Checkout: validate the coupon before payment and mark it REDEEMED in the commit step. The coupon code is part of the idempotency fingerprint.
+  - Checkout: validate the coupon before payment and mark it REDEEMED in the commit step. The (normalised) coupon code is part of the idempotency request match.
 - **Tests:**
-  - **2 concurrent checkouts with the same coupon** → exactly one succeeds
-  - A failed checkout leaves the coupon AVAILABLE
-  - Milestones with n=2, including concurrent generate calls → no duplicate coupons
-  - Rounding (33.33 at 10% → 3.33); 100% coupon → total 0.00
-- **Screens:** coupon field at checkout, discount shown on the Order page; Admin → Coupons ("Generate" button + table)
+  - **10 concurrent checkouts with the same coupon** → exactly one succeeds
+  - A failed checkout (declined payment, price change) leaves the coupon AVAILABLE
+  - Milestones with n=2: none before order 2, backlog paid oldest first, **10 concurrent generate calls → exactly the eligible coupons, no duplicate milestones**; orders placed with a coupon still count
+  - Rounding: 33.33 at 10% → 3.33, 1.25 at 10% → 0.13 (HALF_UP, not banker's); 100% coupon → total 0.00, nothing charged
+  - Same key with or without the coupon → `IDEMPOTENCY_KEY_REUSED`
+- **Screens:** coupon field at checkout (unknown / used codes shown inline, nothing charged), discount shown on the Order page; Admin → Coupons ("Generate" button with the `NO_ELIGIBLE_MILESTONE` reason, table with status and redeeming order)
 
 `POST /admin/coupons` *(admin)* → 201
 ```json
 { "code": "REWARD-0005-K7QP", "percentOff": 10, "milestoneOrderNumber": 5,
-  "status": "AVAILABLE", "generatedAt": "2026-10-07T11:00:00Z", "redeemedByOrderId": null }
+  "status": "AVAILABLE", "generatedAt": "2026-10-07T11:00:00Z", "redeemedByOrderId": null, "redeemedAt": null }
 ```
 → 409 `NO_ELIGIBLE_MILESTONE` (details: `nextMilestone`, `placedOrders`)
 

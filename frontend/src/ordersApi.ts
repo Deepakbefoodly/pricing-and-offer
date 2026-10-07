@@ -6,6 +6,8 @@ export interface CheckoutRequest {
   cartId: string
   expectedSubtotal: Money
   idempotencyKey: string
+  /** Optional reward coupon; part of the request, so a retry must send the same one. */
+  couponCode?: string
 }
 
 export interface CheckoutResponse {
@@ -19,11 +21,11 @@ export interface CheckoutResponse {
  * Places the order. `expectedSubtotal` is the subtotal shown to the customer; the server refuses to charge a
  * different amount. Resending with the same `idempotencyKey` never creates a second order.
  */
-export async function checkoutCart({ cartId, expectedSubtotal, idempotencyKey }: CheckoutRequest): Promise<CheckoutResponse> {
+export async function checkoutCart({ cartId, expectedSubtotal, idempotencyKey, couponCode }: CheckoutRequest): Promise<CheckoutResponse> {
   const response = await apiRequest<Order>(`/carts/${encodeURIComponent(cartId)}/checkout`, {
     method: 'POST',
     headers: { 'Idempotency-Key': idempotencyKey },
-    body: { expectedSubtotal },
+    body: couponCode ? { expectedSubtotal, couponCode } : { expectedSubtotal },
   })
   return {
     order: response.data,
