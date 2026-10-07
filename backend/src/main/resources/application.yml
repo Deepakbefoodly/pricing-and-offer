@@ -8,8 +8,19 @@ spring:
     resources:
       # API-only service: no static files, so unknown paths raise NoHandlerFoundException.
       add-mappings: false
+  jackson:
+    # Reject misspelled or unexpected fields instead of silently ignoring them.
+    deserialization:
+      fail-on-unknown-properties: true
+      # 1.5 for an integer field (e.g. a quantity) is an error, not a silent truncation to 1.
+      accept-float-as-int: false
+    # No implicit "5" -> 5 style conversions; types must match.
+    mapper:
+      allow-coercion-of-scalars: false
 
 store:
+  seed:
+    enabled: true
   rewards:
     n: 5    # every 5th successfully placed order unlocks a coupon
     x: 10   # coupon discount in percent

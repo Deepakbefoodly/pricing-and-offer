@@ -1,5 +1,8 @@
 package store.web;
 
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.exc.MismatchedInputException;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +21,7 @@ import store.error.ErrorCode;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /** Translates every failure into the {@link ApiError} shape so clients never see an HTML or ad-hoc body. */
 @RestControllerAdvice
@@ -40,7 +44,22 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     ResponseEntity<ApiError> handleUnreadableBody(HttpMessageNotReadableException e) {
+        // Name the offending field when JSON parsed but did not bind (wrong type, unknown property).
+        if (e.getCause() instanceof UnrecognizedPropertyException unknown) {
+            return respond(ErrorCode.VALIDATION_ERROR, "Request body has an unknown field",
+                    Map.of("fields", Map.of(fieldPath(unknown), "unknown field")));
+        }
+        if (e.getCause() instanceof MismatchedInputException mismatch && !mismatch.getPath().isEmpty()) {
+            return respond(ErrorCode.VALIDATION_ERROR, "Request body has a field of the wrong type",
+                    Map.of("fields", Map.of(fieldPath(mismatch), "wrong type")));
+        }
         return respond(ErrorCode.VALIDATION_ERROR, "Request body is missing or malformed", Map.of());
+    }
+
+    private static String fieldPath(JsonMappingException e) {
+        return e.getPath().stream()
+                .map(ref -> ref.getFieldName() != null ? ref.getFieldName() : "[" + ref.getIndex() + "]")
+                .collect(Collectors.joining("."));
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)

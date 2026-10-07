@@ -41,7 +41,7 @@ Configuration:
 
 | Topic | Decision |
 |---|---|
-| Money | `BigDecimal`, scale 2, sent in JSON as **strings** (`"25.00"`). Discount = subtotal × x / 100, rounded HALF_UP to cents and capped at the subtotal, so a total is never negative (0.00 allowed). |
+| Money | `BigDecimal`, scale 2, sent in JSON as **strings** (`"25.00"`) in both directions; a JSON number for a money field → `400`, more than 2 decimals → `400` (never rounded silently). Discount = subtotal × x / 100, rounded HALF_UP to cents and capped at the subtotal, so a total is never negative (0.00 allowed). |
 | Price change after add-to-cart | Checkout charges the **current** price. The client sends `expectedSubtotal`; a mismatch → `409 PRICE_CHANGED`. |
 | Stock | Not reserved in the cart. Adding more than is available → `409 INSUFFICIENT_STOCK`. Checkout re-checks all lines and rejects the whole order on any shortage. |
 | Checkout retries | `Idempotency-Key` header is **required**. Same key + same body → replays the original order (200). Same key + different body → `422`. New key on a checked-out cart → `409 CART_ALREADY_CHECKED_OUT`. Only successful checkouts are recorded. |
@@ -50,6 +50,8 @@ Configuration:
 | Coupons | Global bearer code, single use, no expiry, one per order. Admin generates **one coupon per call** for the oldest unrewarded milestone (`placedOrders ≥ (generated + 1) × n`). Orders that used a coupon still count toward milestones. |
 | Report | Computed from orders and coupons (no separate counters), under the read lock, so it reconciles and never changes state. |
 | Errors | `{ "code", "message", "details" }` with stable codes (table in §4). |
+| Admin edits | Price/stock edits carry the product `version` the admin loaded (optimistic check); a stale version → `409 PRODUCT_MODIFIED`, so an edit never overwrites a concurrent sale. Stock is set as an absolute value. |
+| Input strictness | Unknown JSON fields, wrong types (`"5"` for a number) and fractions for integers (`1.5`) → `400` with the field named. |
 | Admin | Everything under `/admin/**`. No auth (per spec). |
 
 ## 3. Vertical slices
@@ -61,21 +63,21 @@ Each slice adds: entity → repository → service → controller → tests → 
 - **Demo:** both apps start; an unknown backend route returns a JSON error body.
 
 ### Slice 1: Products
-- **Entity:** `Product { id, name, unitPrice, availableQty }`
+- **Entity:** `Product { id, name, unitPrice, availableQty, version }` (immutable; every change → `version + 1`)
 - **Seed:** shirt 25.00 ×100, jeans 49.99 ×50, shoes 89.90 ×30, socks 5.49 ×200, **watch 199.00 ×3 (limited)**, hoodie 39.00 ×0
-- **Service:** list, get, admin update
-- **Tests:** seed data present; update validation
-- **Screens:** Products page (table + "Add to cart"); Admin → Products (edit price and stock)
+- **Service:** list, get, admin update (version-checked, under the write lock); `StoreLock` introduced here
+- **Tests:** seed data present; update validation; **10 concurrent edits from the same version → exactly one wins**
+- **Screens:** Products page (table + "Add to cart", enabled in Slice 2); Admin → Products (edit price and stock, conflict notice + reload on `PRODUCT_MODIFIED`)
 
 `GET /products` → 200
 ```json
-[{ "id": "watch", "name": "Limited Watch", "unitPrice": "199.00", "availableQty": 3 }]
+[{ "id": "watch", "name": "Limited Watch", "unitPrice": "199.00", "availableQty": 3, "version": 1 }]
 ```
-`PATCH /admin/products/{id}` *(admin)*
+`PATCH /admin/products/{id}` *(admin)*: `version` required; `unitPrice` and/or `availableQty`
 ```json
-{ "unitPrice": "27.50", "availableQty": 80 }
+{ "version": 1, "unitPrice": "27.50", "availableQty": 80 }
 ```
-→ 200 product · 404 `PRODUCT_NOT_FOUND` · 400 `VALIDATION_ERROR`
+→ 200 product (version 2) · 404 `PRODUCT_NOT_FOUND` · 400 `VALIDATION_ERROR` · 409 `PRODUCT_MODIFIED` (details: `expectedVersion`, `currentVersion`)
 
 ### Slice 2: Carts
 - **Entity:** `Cart { id, status: OPEN|CHECKED_OUT, items (insertion-ordered), orderId? }`
@@ -193,7 +195,7 @@ Errors: 404 `COUPON_NOT_FOUND` · 409 `COUPON_ALREADY_REDEEMED`
 | `PAYMENT_FAILED` | 402 |
 | `NOT_FOUND` (unknown route), `PRODUCT_NOT_FOUND`, `CART_NOT_FOUND`, `ORDER_NOT_FOUND`, `COUPON_NOT_FOUND` | 404 |
 | `METHOD_NOT_ALLOWED` | 405 |
-| `CART_NOT_OPEN`, `CART_ALREADY_CHECKED_OUT`, `INSUFFICIENT_STOCK`, `PRICE_CHANGED`, `COUPON_ALREADY_REDEEMED`, `NO_ELIGIBLE_MILESTONE` | 409 |
+| `PRODUCT_MODIFIED`, `CART_NOT_OPEN`, `CART_ALREADY_CHECKED_OUT`, `INSUFFICIENT_STOCK`, `PRICE_CHANGED`, `COUPON_ALREADY_REDEEMED`, `NO_ELIGIBLE_MILESTONE` | 409 |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 |
 | `CART_EMPTY`, `IDEMPOTENCY_KEY_REUSED` | 422 |
 | `INTERNAL_ERROR` (no internals leaked) | 500 |
