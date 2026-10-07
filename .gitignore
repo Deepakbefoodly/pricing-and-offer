@@ -1,0 +1,46 @@
+# Compiled output
+out/
+target/
+build/
+bin/
+*.class
+
+# Build tool caches
+.gradle/
+.mvn/wrapper/maven-wrapper.jar
+
+# Packaged artifacts
+*.jar
+*.war
+*.ear
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse / VS Code
+.classpath
+.project
+.settings/
+.vscode/
+
+# Logs and temp files
+*.log
+hs_err_pid*
+*.tmp
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local tool config
+.claude/

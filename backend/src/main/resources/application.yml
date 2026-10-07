@@ -1,0 +1,18 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: checkout-service
+  web:
+    resources:
+      # API-only service: no static files, so unknown paths raise NoHandlerFoundException.
+      add-mappings: false
+
+store:
+  rewards:
+    n: 5    # every 5th successfully placed order unlocks a coupon
+    x: 10   # coupon discount in percent
+  cors:
+    allowed-origins:
+      - http://localhost:5173
