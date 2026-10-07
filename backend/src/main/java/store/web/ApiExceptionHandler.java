@@ -5,8 +5,11 @@ import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -31,7 +34,13 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ApiError> handleApi(ApiException e) {
-        return respond(e.getCode(), e.getMessage(), e.getDetails());
+        ResponseEntity<ApiError> response = respond(e.getCode(), e.getMessage(), e.getDetails());
+        if (e.getDetails().get("retryAfterSeconds") instanceof Long seconds) {
+            // Standard header for 429, so generic HTTP clients back off without parsing the body.
+            return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
+                    .header(HttpHeaders.RETRY_AFTER, String.valueOf(seconds)).body(response.getBody());
+        }
+        return response;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -82,6 +91,11 @@ public class ApiExceptionHandler {
         return respond(ErrorCode.METHOD_NOT_ALLOWED, "Method " + e.getMethod() + " is not supported for this path", Map.of());
     }
 
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    ResponseEntity<ApiError> handleNotAcceptable(HttpMediaTypeNotAcceptableException e) {
+        return respond(ErrorCode.NOT_ACCEPTABLE, "This API only produces application/json", Map.of());
+    }
+
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ApiError> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException e) {
         return respond(ErrorCode.UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json", Map.of());
@@ -93,7 +107,12 @@ public class ApiExceptionHandler {
         return respond(ErrorCode.INTERNAL_ERROR, "Unexpected server error", Map.of());
     }
 
-    private static ResponseEntity<ApiError> respond(ErrorCode code, String message, Map<String, Object> details) {
-        return ResponseEntity.status(code.status()).body(new ApiError(code, message, details));
+    /**
+     * The content type is fixed to JSON rather than negotiated: otherwise a client sending e.g.
+     * {@code Accept: application/xml} turns every error into a failed error handler and a 500.
+     */
+    static ResponseEntity<ApiError> respond(ErrorCode code, String message, Map<String, Object> details) {
+        return ResponseEntity.status(code.status()).contentType(MediaType.APPLICATION_JSON)
+                .body(new ApiError(code, message, details));
     }
 }

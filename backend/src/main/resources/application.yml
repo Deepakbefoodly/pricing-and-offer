@@ -27,3 +27,6 @@ store:
   cors:
     allowed-origins:
       - http://localhost:5173
+  coupon-guessing:
+    max-failed-attempts: 10   # unknown coupon codes per client (IP) ...
+    window: 15m               # ... within this window, before coupon checkouts get 429

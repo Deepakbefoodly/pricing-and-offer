@@ -69,7 +69,7 @@ class CouponServiceTest {
         assertThat(first.milestoneOrderNumber()).isEqualTo(2);
         assertThat(second.milestoneOrderNumber()).isEqualTo(4);
         assertThat(first.percentOff()).isEqualTo(10);
-        assertThat(first.code()).matches("REWARD-0002-[A-Z2-9]{4}");
+        assertThat(first.code()).matches("REWARD-0002-[A-Z2-9]{10}");
         assertThat(e.getDetails()).containsEntry("nextMilestone", 6L);
     }
 

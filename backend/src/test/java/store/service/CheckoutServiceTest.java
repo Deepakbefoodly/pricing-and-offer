@@ -343,6 +343,17 @@ class CheckoutServiceTest {
                 .isEqualTo("0.13"); // 0.125: HALF_UP, not banker's rounding (which would give 0.12)
     }
 
+    /** Regression: subtotals above the per-price cap used to be rejected as "invalid amount", blocking checkout. */
+    @Test
+    void cartsWorthMoreThanAnySinglePriceCanBeCheckedOut() {
+        catalog.update("watch", 1, "9999999.99", null);
+        String cartId = cartWith(Map.of("watch", 2));
+
+        Order order = place(cartId, "19999999.98");
+
+        assertThat(order.total()).isEqualTo("19999999.98");
+    }
+
     @Test
     void fullDiscountMakesTheTotalZeroAndNothingIsCharged() {
         Order order = checkout.checkout(cartWith(Map.of("shirt", 1)), "key-1", "25.00", issueCoupon(100)).order();

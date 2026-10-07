@@ -39,7 +39,7 @@ export default function CartPage() {
       const apiError = toApiError(e)
       if (apiError.code === 'PRICE_CHANGED' || apiError.code === 'INSUFFICIENT_STOCK') {
         setCheckoutProblem(apiError) // the cart has been reloaded with current prices and stock
-      } else if (apiError.code === 'COUPON_NOT_FOUND' || apiError.code === 'COUPON_ALREADY_REDEEMED') {
+      } else if (['COUPON_NOT_FOUND', 'COUPON_ALREADY_REDEEMED', 'RATE_LIMITED'].includes(apiError.code)) {
         setCouponProblem(apiError) // nothing was charged; fix or clear the code and try again
       } else if (apiError.code === 'CART_ALREADY_CHECKED_OUT' && typeof apiError.details.orderId === 'string') {
         toast.error(apiError) // e.g. checked out from another tab: show the order it became

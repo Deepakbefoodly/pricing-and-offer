@@ -29,7 +29,8 @@ public class CouponService {
 
     // No 0/O or 1/I so codes survive being read aloud or retyped.
     private static final char[] CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
-    private static final int CODE_SUFFIX_LENGTH = 4;
+    // 10 characters from a 32-letter alphabet = 50 random bits: not practically guessable.
+    private static final int CODE_SUFFIX_LENGTH = 10;
 
     private final CouponRepository coupons;
     private final OrderRepository orders;
