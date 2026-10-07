@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ApiError } from '../api.ts'
 import { addCartItem, createCart, getCart, removeCartItem, setCartItemQuantity } from '../cartApi.ts'
-import { CartContext, type CartApi } from '../context/CartContext.ts'
-import { checkoutCart } from '../ordersApi.ts'
-import type { Cart, Order } from '../types.ts'
+import { CartContext, type CartApi, type CheckoutOutcome } from '../context/CartContext.ts'
+import { checkoutCart, type CheckoutRequest } from '../ordersApi.ts'
+import type { Cart } from '../types.ts'
 
 const STORAGE_KEY = 'cartId'
 
@@ -31,7 +31,28 @@ function storeCartId(cartId: string | null) {
  * The stored cart can no longer be shopped with: the backend forgot it (in-memory restart) or it was
  * already checked out (e.g. in another tab). Either way the next "Add to cart" should start a new cart.
  */
-const isUnusableCart = (e: unknown) => e instanceof ApiError && (e.code === 'CART_NOT_FOUND' || e.code === 'CART_NOT_OPEN')
+const isUnusableCart = (e: unknown) =>
+  e instanceof ApiError && ['CART_NOT_FOUND', 'CART_NOT_OPEN', 'CART_ALREADY_CHECKED_OUT'].includes(e.code)
+
+const NETWORK_RETRIES = 2
+const RETRY_DELAY_MS = 500
+
+/**
+ * When the request or its response is lost we cannot know whether the order was placed, so resend the
+ * identical request (same Idempotency-Key): the server either places it now or replays the order it placed.
+ */
+async function sendWithRetries(request: CheckoutRequest) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await checkoutCart(request)
+    } catch (e) {
+      if (!(e instanceof ApiError && e.code === 'NETWORK_ERROR') || attempt >= NETWORK_RETRIES) {
+        throw e
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)))
+    }
+  }
+}
 
 /** Checkout failures that mean the cart on screen is out of date; reload it so the customer sees why. */
 const isStaleView = (e: unknown) => e instanceof ApiError && (e.code === 'PRICE_CHANGED' || e.code === 'INSUFFICIENT_STOCK')
@@ -48,6 +69,8 @@ export default function CartProvider({ children }: { children: ReactNode }) {
   const cartIdRef = useRef<string | null>(readStoredCartId())
   // Shared so two quick "Add to cart" clicks on a fresh session create one cart, not two.
   const creatingRef = useRef<Promise<string> | null>(null)
+  // The checkout attempt in progress (or last failed), whose Idempotency-Key a retry must reuse.
+  const attemptRef = useRef<CheckoutRequest | null>(null)
 
   const adopt = useCallback((next: Cart | null) => {
     cartIdRef.current = next?.id ?? null
@@ -127,16 +150,25 @@ export default function CartProvider({ children }: { children: ReactNode }) {
   )
 
   const checkout = useCallback(
-    async (expectedSubtotal: string): Promise<Order> => {
+    async (expectedSubtotal: string): Promise<CheckoutOutcome> => {
       const cartId = cartIdRef.current
       if (!cartId) {
         throw new ApiError('CART_NOT_FOUND', 'There is no cart to check out', 404)
       }
+      // One key per checkout attempt: pressing Checkout again for the same cart and amount (e.g. after a
+      // network error) reuses it, so the server can recognise the retry. A new amount is a new attempt.
+      const previous = attemptRef.current
+      const request: CheckoutRequest =
+        previous && previous.cartId === cartId && previous.expectedSubtotal === expectedSubtotal
+          ? previous
+          : { cartId, expectedSubtotal, idempotencyKey: crypto.randomUUID() }
+      attemptRef.current = request
       setInFlight((n) => n + 1)
       try {
-        const order = await checkoutCart(cartId, expectedSubtotal)
+        const { order, replayed } = await sendWithRetries(request)
+        attemptRef.current = null
         adopt(null) // the cart is closed; the next "Add to cart" starts a new one
-        return order
+        return { order, replayed, request }
       } catch (e) {
         if (isUnusableCart(e)) {
           adopt(null)

@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useLocation, useParams } from 'react-router'
 import { ApiError } from '../api.ts'
 import ErrorMessage from '../components/ErrorMessage.tsx'
-import { getOrder } from '../ordersApi.ts'
+import RetryDemo from '../components/RetryDemo.tsx'
+import { getOrder, type CheckoutRequest } from '../ordersApi.ts'
 import type { Order } from '../types.ts'
 
 export default function OrderPage() {
   const { orderId = '' } = useParams()
+  // Present only when we arrived straight from checkout; enables the retry demo.
+  const checkoutRequest = (useLocation().state as { checkoutRequest?: CheckoutRequest } | null)?.checkoutRequest
   const [result, setResult] = useState<{ orderId: string; order?: Order; error?: ApiError } | null>(null)
 
   useEffect(() => {
@@ -79,6 +82,8 @@ export default function OrderPage() {
       <Link to="/products" className="mt-4 inline-block text-sm text-blue-600 hover:underline">
         Continue shopping
       </Link>
+
+      {checkoutRequest && <RetryDemo request={checkoutRequest} orderId={order.id} />}
     </section>
   )
 }

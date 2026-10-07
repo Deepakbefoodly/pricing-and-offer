@@ -10,6 +10,7 @@ import store.payment.FakePaymentGateway;
 import store.payment.PaymentDeclinedException;
 import store.payment.PaymentGateway;
 import store.repository.CartRepository;
+import store.repository.IdempotencyStore;
 import store.repository.OrderRepository;
 import store.repository.ProductRepository;
 
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -40,6 +42,7 @@ class CheckoutServiceTest {
     private CatalogService catalog;
     private CartService carts;
     private OrderRepository orders;
+    private IdempotencyStore idempotency;
     private FakePaymentGateway fakePayments;
     private AtomicBoolean declinePayments;
     private CheckoutService checkout;
@@ -54,6 +57,7 @@ class CheckoutServiceTest {
         catalog = new CatalogService(products, lock);
         carts = new CartService(new CartRepository(), catalog, lock);
         orders = new OrderRepository();
+        idempotency = new IdempotencyStore();
         fakePayments = new FakePaymentGateway();
         declinePayments = new AtomicBoolean(false);
         PaymentGateway payments = (orderId, amount) -> {
@@ -62,14 +66,14 @@ class CheckoutServiceTest {
             }
             fakePayments.charge(orderId, amount);
         };
-        checkout = new CheckoutService(carts, catalog, products, orders, payments, lock, Clock.fixed(NOW, ZoneOffset.UTC));
+        checkout = new CheckoutService(carts, catalog, products, orders, idempotency, payments, lock, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
     void checkoutCreatesAnOrderDecrementsStockAndClosesTheCart() {
         String cartId = cartWith(Map.of("shirt", 2, "socks", 3));
 
-        Order order = checkout.checkout(cartId, "66.47");
+        Order order = place(cartId, "66.47");
 
         assertThat(order.orderNumber()).isEqualTo(1);
         assertThat(order.cartId()).isEqualTo(cartId);
@@ -92,7 +96,7 @@ class CheckoutServiceTest {
     @Test
     void orderKeepsItsSnapshotWhenTheProductChangesLater() {
         String cartId = cartWith(Map.of("shirt", 2));
-        Order order = checkout.checkout(cartId, "50.00");
+        Order order = place(cartId, "50.00");
 
         catalog.update("shirt", product("shirt").version(), "99.00", null);
 
@@ -105,11 +109,11 @@ class CheckoutServiceTest {
         String cartId = cartWith(Map.of("shirt", 2));
         catalog.update("shirt", 1, "26.00", null);
 
-        ApiException e = assertError(() -> checkout.checkout(cartId, "50.00"), ErrorCode.PRICE_CHANGED);
+        ApiException e = assertError(() -> place(cartId, "50.00"), ErrorCode.PRICE_CHANGED);
         assertThat(e.getDetails()).containsEntry("expectedSubtotal", "50.00").containsEntry("currentSubtotal", "52.00");
         assertNothingHappened(cartId, "shirt", 100);
 
-        assertThat(checkout.checkout(cartId, "52.00").total()).isEqualTo("52.00");
+        assertThat(place(cartId, "52.00").total()).isEqualTo("52.00");
     }
 
     @Test
@@ -117,7 +121,7 @@ class CheckoutServiceTest {
         String cartId = cartWith(Map.of("watch", 3, "shirt", 1));
         catalog.update("watch", 1, null, 1); // sold elsewhere / stock correction after the item was added
 
-        ApiException e = assertError(() -> checkout.checkout(cartId, "622.00"), ErrorCode.INSUFFICIENT_STOCK);
+        ApiException e = assertError(() -> place(cartId, "622.00"), ErrorCode.INSUFFICIENT_STOCK);
         assertThat(e.getDetails().get("shortages"))
                 .isEqualTo(List.of(Map.of("productId", "watch", "requested", 3, "available", 1)));
         assertNothingHappened(cartId, "shirt", 100);
@@ -129,35 +133,35 @@ class CheckoutServiceTest {
         String cartId = cartWith(Map.of("watch", 1));
         declinePayments.set(true);
 
-        ApiException e = assertError(() -> checkout.checkout(cartId, "199.00"), ErrorCode.PAYMENT_FAILED);
+        ApiException e = assertError(() -> place(cartId, "199.00"), ErrorCode.PAYMENT_FAILED);
         assertThat(e.getDetails()).containsEntry("reason", "card declined");
         assertNothingHappened(cartId, "watch", 3);
 
         declinePayments.set(false);
-        assertThat(checkout.checkout(cartId, "199.00").orderNumber()).isEqualTo(1);
+        assertThat(place(cartId, "199.00").orderNumber()).isEqualTo(1);
         assertThat(product("watch").availableQty()).isEqualTo(2);
     }
 
     @Test
     void emptyCartCannotBeCheckedOut() {
         String cartId = carts.create().id();
-        assertError(() -> checkout.checkout(cartId, "0.00"), ErrorCode.CART_EMPTY);
+        assertError(() -> place(cartId, "0.00"), ErrorCode.CART_EMPTY);
     }
 
     @Test
     void unknownCartAndMalformedSubtotalAreRejected() {
-        assertError(() -> checkout.checkout("cart_missing", "1.00"), ErrorCode.CART_NOT_FOUND);
+        assertError(() -> place("cart_missing", "1.00"), ErrorCode.CART_NOT_FOUND);
         String cartId = cartWith(Map.of("shirt", 1));
-        assertError(() -> checkout.checkout(cartId, "25.001"), ErrorCode.VALIDATION_ERROR);
+        assertError(() -> place(cartId, "25.001"), ErrorCode.VALIDATION_ERROR);
         assertNothingHappened(cartId, "shirt", 100);
     }
 
     @Test
     void aCartCanOnlyBeCheckedOutOnce() {
         String cartId = cartWith(Map.of("shirt", 1));
-        Order first = checkout.checkout(cartId, "25.00");
+        Order first = place(cartId, "25.00");
 
-        ApiException e = assertError(() -> checkout.checkout(cartId, "25.00"), ErrorCode.CART_NOT_OPEN);
+        ApiException e = assertError(() -> place(cartId, "25.00"), ErrorCode.CART_ALREADY_CHECKED_OUT);
         assertThat(e.getDetails()).containsEntry("orderId", first.id());
         assertThat(orders.count()).isEqualTo(1);
         assertThat(product("shirt").availableQty()).isEqualTo(99);
@@ -165,8 +169,8 @@ class CheckoutServiceTest {
 
     @Test
     void orderNumbersFollowCommitOrder() {
-        Order first = checkout.checkout(cartWith(Map.of("shirt", 1)), "25.00");
-        Order second = checkout.checkout(cartWith(Map.of("socks", 1)), "5.49");
+        Order first = place(cartWith(Map.of("shirt", 1)), "25.00");
+        Order second = place(cartWith(Map.of("socks", 1)), "5.49");
         assertThat(List.of(first.orderNumber(), second.orderNumber())).containsExactly(1L, 2L);
     }
 
@@ -180,7 +184,7 @@ class CheckoutServiceTest {
 
         List<Optional<Order>> results = runConcurrently(cartIds.stream().<Callable<Optional<Order>>>map(cartId -> () -> {
             try {
-                return Optional.of(checkout.checkout(cartId, "199.00"));
+                return Optional.of(place(cartId, "199.00"));
             } catch (ApiException e) {
                 assertThat(e.getCode()).isEqualTo(ErrorCode.INSUFFICIENT_STOCK);
                 return Optional.empty();
@@ -195,7 +199,7 @@ class CheckoutServiceTest {
         assertThat(fakePayments.charges()).hasSize(3);
     }
 
-    /** The same cart submitted ten times at once (double clicks, retries): exactly one order. */
+    /** The same cart submitted ten times at once with different keys (e.g. two tabs): exactly one order. */
     @Test
     void concurrentCheckoutsOfOneCartCreateOneOrder() throws Exception {
         String cartId = cartWith(Map.of("shirt", 1));
@@ -203,9 +207,9 @@ class CheckoutServiceTest {
         List<Optional<Order>> results = runConcurrently(java.util.stream.IntStream.range(0, 10)
                 .<Callable<Optional<Order>>>mapToObj(i -> () -> {
                     try {
-                        return Optional.of(checkout.checkout(cartId, "25.00"));
+                        return Optional.of(place(cartId, "25.00"));
                     } catch (ApiException e) {
-                        assertThat(e.getCode()).isEqualTo(ErrorCode.CART_NOT_OPEN);
+                        assertThat(e.getCode()).isEqualTo(ErrorCode.CART_ALREADY_CHECKED_OUT);
                         return Optional.empty();
                     }
                 }).toList());
@@ -214,6 +218,97 @@ class CheckoutServiceTest {
         assertThat(orders.count()).isEqualTo(1);
         assertThat(fakePayments.charges()).hasSize(1);
         assertThat(product("shirt").availableQty()).isEqualTo(99);
+    }
+
+    // --- Idempotent retries -------------------------------------------------------------------------------
+
+    /** A client times out and its retries race the original: one order, one charge, one stock movement. */
+    @Test
+    void concurrentRetriesWithTheSameKeyPlaceOneOrderAndReplayIt() throws Exception {
+        String cartId = cartWith(Map.of("watch", 1));
+
+        List<CheckoutService.Result> results = runConcurrently(java.util.stream.IntStream.range(0, 10)
+                .<Callable<CheckoutService.Result>>mapToObj(i -> () -> checkout.checkout(cartId, "key-1", "199.00"))
+                .toList());
+
+        assertThat(results).filteredOn(r -> !r.replayed()).hasSize(1);
+        assertThat(results).filteredOn(CheckoutService.Result::replayed).hasSize(9);
+        assertThat(results).extracting(r -> r.order().id()).containsOnly(results.get(0).order().id());
+        assertThat(orders.count()).isEqualTo(1);
+        assertThat(fakePayments.charges()).hasSize(1);
+        assertThat(product("watch").availableQty()).isEqualTo(2);
+    }
+
+    @Test
+    void retryReturnsTheOriginalOrderEvenAfterPricesChange() {
+        String cartId = cartWith(Map.of("shirt", 2));
+        Order original = checkout.checkout(cartId, "key-1", "50.00").order();
+        catalog.update("shirt", product("shirt").version(), "30.00", null);
+
+        CheckoutService.Result retry = checkout.checkout(cartId, "key-1", "50.00");
+
+        assertThat(retry.replayed()).isTrue();
+        assertThat(retry.order()).isEqualTo(original);
+        assertThat(fakePayments.charges()).hasSize(1);
+    }
+
+    @Test
+    void retryMatchesTheSubtotalByValueNotByText() {
+        String cartId = cartWith(Map.of("shirt", 2));
+        checkout.checkout(cartId, "key-1", "50.00");
+        assertThat(checkout.checkout(cartId, "key-1", "50").replayed()).isTrue();
+    }
+
+    @Test
+    void reusingAKeyForADifferentRequestIsRejected() {
+        String cartId = cartWith(Map.of("shirt", 2));
+        checkout.checkout(cartId, "key-1", "50.00");
+        String otherCart = cartWith(Map.of("shirt", 2));
+
+        assertError(() -> checkout.checkout(cartId, "key-1", "49.00"), ErrorCode.IDEMPOTENCY_KEY_REUSED);
+        ApiException e = assertError(() -> checkout.checkout(otherCart, "key-1", "50.00"), ErrorCode.IDEMPOTENCY_KEY_REUSED);
+        assertThat(e.getDetails()).isEmpty(); // never reveals the other request's cart
+        assertThat(carts.get(otherCart).status().name()).isEqualTo("OPEN");
+        assertThat(orders.count()).isEqualTo(1);
+    }
+
+    @Test
+    void aFailedAttemptIsNotRecordedSoTheSameKeyCanBeRetried() {
+        String cartId = cartWith(Map.of("watch", 1));
+        declinePayments.set(true);
+        assertError(() -> checkout.checkout(cartId, "key-1", "199.00"), ErrorCode.PAYMENT_FAILED);
+
+        declinePayments.set(false);
+        CheckoutService.Result retry = checkout.checkout(cartId, "key-1", "199.00");
+
+        assertThat(retry.replayed()).isFalse();
+        assertThat(orders.count()).isEqualTo(1);
+        assertThat(fakePayments.charges()).hasSize(1);
+    }
+
+    @Test
+    void aNewKeyForACheckedOutCartPointsToItsOrder() {
+        String cartId = cartWith(Map.of("shirt", 1));
+        Order order = checkout.checkout(cartId, "key-1", "25.00").order();
+
+        ApiException e = assertError(() -> checkout.checkout(cartId, "key-2", "25.00"), ErrorCode.CART_ALREADY_CHECKED_OUT);
+        assertThat(e.getDetails()).containsEntry("orderId", order.id());
+    }
+
+    @Test
+    void theKeyIsRequiredAndValidated() {
+        String cartId = cartWith(Map.of("shirt", 1));
+        assertError(() -> checkout.checkout(cartId, null, "25.00"), ErrorCode.IDEMPOTENCY_KEY_MISSING);
+        assertError(() -> checkout.checkout(cartId, "  ", "25.00"), ErrorCode.IDEMPOTENCY_KEY_MISSING);
+        assertError(() -> checkout.checkout(cartId, "has space", "25.00"), ErrorCode.VALIDATION_ERROR);
+        assertError(() -> checkout.checkout(cartId, "k".repeat(CheckoutService.MAX_KEY_LENGTH + 1), "25.00"),
+                ErrorCode.VALIDATION_ERROR);
+        assertThat(orders.count()).isZero();
+    }
+
+    /** One checkout attempt with its own fresh key, i.e. not a retry. */
+    private Order place(String cartId, String expectedSubtotal) {
+        return checkout.checkout(cartId, UUID.randomUUID().toString(), expectedSubtotal).order();
     }
 
     private String cartWith(Map<String, Integer> items) {

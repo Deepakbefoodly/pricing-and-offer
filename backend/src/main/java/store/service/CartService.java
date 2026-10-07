@@ -88,7 +88,8 @@ public class CartService {
         return CartView.of(cart, catalog::require);
     }
 
-    private Cart requireCart(String cartId) {
+    /** Looks up a cart or fails with CART_NOT_FOUND. Caller holds the lock. */
+    Cart requireCart(String cartId) {
         return carts.findById(cartId)
                 .orElseThrow(() -> new ApiException(ErrorCode.CART_NOT_FOUND, "Cart not found: " + cartId,
                         Map.of("cartId", cartId)));

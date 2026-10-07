@@ -27,13 +27,18 @@ export default function CartPage() {
   async function placeOrder(expectedSubtotal: string) {
     setCheckoutProblem(null)
     try {
-      const order = await checkout(expectedSubtotal)
-      toast.success(`Order #${order.orderNumber} placed`)
-      navigate(`/orders/${order.id}`)
+      const { order, replayed, request } = await checkout(expectedSubtotal)
+      // A replay here means a lost response was retried automatically; to the shopper it is simply placed.
+      toast.success(`Order #${order.orderNumber} placed${replayed ? ' (confirmed after a retry)' : ''}`)
+      // Pass the request along so the order page can demonstrate a safe retry.
+      navigate(`/orders/${order.id}`, { state: { checkoutRequest: request } })
     } catch (e) {
       const apiError = toApiError(e)
       if (apiError.code === 'PRICE_CHANGED' || apiError.code === 'INSUFFICIENT_STOCK') {
         setCheckoutProblem(apiError) // the cart has been reloaded with current prices and stock
+      } else if (apiError.code === 'CART_ALREADY_CHECKED_OUT' && typeof apiError.details.orderId === 'string') {
+        toast.error(apiError) // e.g. checked out from another tab: show the order it became
+        navigate(`/orders/${apiError.details.orderId}`)
       } else {
         toast.error(apiError)
       }
