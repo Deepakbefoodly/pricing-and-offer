@@ -44,7 +44,7 @@ Configuration:
 | Money | `BigDecimal`, scale 2, sent in JSON as **strings** (`"25.00"`) in both directions; a JSON number for a money field → `400`, more than 2 decimals → `400` (never rounded silently). Discount = subtotal × x / 100, rounded HALF_UP to cents and capped at the subtotal, so a total is never negative (0.00 allowed). |
 | Price change after add-to-cart | Checkout charges the **current** price. The client sends `expectedSubtotal`; a mismatch → `409 PRICE_CHANGED`. |
 | Stock | Not reserved in the cart. Raising a line above available stock → `409 INSUFFICIENT_STOCK`; lowering a line is always allowed (so a line that went out of stock can be reduced). Checkout re-checks all lines and rejects the whole order on any shortage. |
-| Checkout retries | `Idempotency-Key` header is **required**. Same key + same body → replays the original order (200). Same key + different body → `422`. New key on a checked-out cart → `409 CART_ALREADY_CHECKED_OUT`. Only successful checkouts are recorded. |
+| Checkout retries | `Idempotency-Key` header is **required** (1–100 printable ASCII, no spaces; keys are global, kept for the process lifetime). Same key + same request (cart, subtotal compared by value) → replays the original order (200, `Idempotent-Replayed: true`), even if prices or stock changed since. Same key + different request → `422` (no details, so another request's cart ID never leaks). New key on a checked-out cart → `409 CART_ALREADY_CHECKED_OUT`. Only successful checkouts are recorded, so a failed attempt can be retried with the same key. |
 | Concurrency | One store-wide read/write lock. Checkout validates everything and calls payment **before** changing any state, so a failure leaves nothing to undo. |
 | Payment | `PaymentGateway` interface with a fake that succeeds by default and can be made to fail in tests. |
 | Coupons | Global bearer code, single use, no expiry, one per order. Admin generates **one coupon per call** for the oldest unrewarded milestone (`placedOrders ≥ (generated + 1) × n`). Orders that used a coupon still count toward milestones. |
@@ -127,13 +127,15 @@ Errors: 404 `CART_NOT_FOUND` / `PRODUCT_NOT_FOUND` / `CART_ITEM_NOT_FOUND` (PUT/
 Checkout errors: 404 `CART_NOT_FOUND` · 400 `VALIDATION_ERROR` (missing / malformed `expectedSubtotal`) · 409 `CART_NOT_OPEN` (details: `orderId`) · 422 `CART_EMPTY` · 409 `PRICE_CHANGED` (details: expected vs current) · 409 `INSUFFICIENT_STOCK` (details: shortages) · 402 `PAYMENT_FAILED`
 
 ### Slice 4: Idempotent retries
-- **Entity:** `IdempotencyRecord { key, fingerprint(cartId, couponCode, expectedSubtotal), orderId }`
-- **Service:** the key check runs first, inside the checkout lock; the record is saved in the commit step
+- **Entity:** `IdempotencyRecord { key, cartId, expectedSubtotal, orderId, createdAt }` (the request fields themselves, compared exactly; `couponCode` joins in Slice 5)
+- **Service:** the key check runs first, inside the checkout lock; the record is saved in the commit step. A new key on a closed cart now gets `CART_ALREADY_CHECKED_OUT` (replacing Slice 3's `CART_NOT_OPEN` for checkout).
 - **Tests:**
-  - **The same key sent by 10 threads at once** → one 201 and nine 200s, one order, stock charged once
-  - Same key with a different body → 422
-  - A failed attempt can be retried with the same key
-- **Screen:** checkout keeps one UUID key per attempt; a "Simulate retry" button shows that the same order came back
+  - **The same key sent by 10 threads at once** → one new order and nine replays, one charge, stock decremented once
+  - Replay returns the original order even after a price change; `"50"` and `"50.00"` count as the same request
+  - Same key with a different subtotal or a different cart → 422
+  - A failed attempt (payment declined) is not recorded, so the same key can be retried
+  - Missing / blank / invalid keys
+- **Screen:** checkout keeps one UUID key per attempt (same cart + same subtotal reuses it) and automatically resends with the same key after a network error; the Order page has a retry demo ("Simulate retry (same key)" → same order, HTTP 200; "New attempt (new key)" → `CART_ALREADY_CHECKED_OUT`)
 
 `POST /carts/{id}/checkout` + header `Idempotency-Key: 7c9e6679-…`
 - First call → 201 order

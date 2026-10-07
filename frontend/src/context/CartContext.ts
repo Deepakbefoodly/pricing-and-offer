@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { ApiError } from '../api.ts'
+import type { CheckoutRequest } from '../ordersApi.ts'
 import type { Cart, Money, Order } from '../types.ts'
 
 export interface CartApi {
@@ -19,7 +20,14 @@ export interface CartApi {
    * Places the order for the subtotal the customer saw. On success the cart is cleared. On PRICE_CHANGED or
    * INSUFFICIENT_STOCK the cart is reloaded (so the screen shows the new prices / stock) and the error rethrown.
    */
-  checkout: (expectedSubtotal: Money) => Promise<Order>
+  checkout: (expectedSubtotal: Money) => Promise<CheckoutOutcome>
+}
+
+export interface CheckoutOutcome {
+  order: Order
+  replayed: boolean
+  /** The exact request that placed the order, so it can be resent to demonstrate idempotency. */
+  request: CheckoutRequest
 }
 
 export const CartContext = createContext<CartApi | null>(null)
