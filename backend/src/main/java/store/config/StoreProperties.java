@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -16,7 +17,8 @@ import java.util.List;
  */
 @Validated
 @ConfigurationProperties(prefix = "store")
-public record StoreProperties(@Valid @NotNull Rewards rewards, @Valid @NotNull Cors cors) {
+public record StoreProperties(@Valid @NotNull Rewards rewards, @Valid @NotNull Cors cors,
+                              @Valid @NotNull CouponGuessing couponGuessing) {
 
     /**
      * @param n every n-th successfully placed order unlocks one coupon
@@ -26,5 +28,12 @@ public record StoreProperties(@Valid @NotNull Rewards rewards, @Valid @NotNull C
     }
 
     public record Cors(@NotEmpty List<String> allowedOrigins) {
+    }
+
+    /**
+     * @param maxFailedAttempts unknown coupon codes one client may try within {@code window} before its
+     *                          coupon checkouts are refused with 429
+     */
+    public record CouponGuessing(@Min(1) int maxFailedAttempts, @NotNull Duration window) {
     }
 }

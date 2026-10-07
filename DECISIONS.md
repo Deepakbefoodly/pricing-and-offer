@@ -148,8 +148,10 @@ plus "only if the milestone was reached and not already rewarded".
 call. Tie coupons to a customer vs. bearer codes.
 
 **Choice:** Coupon *k* rewards order *k·n*; a coupon can be generated when `placedOrders ≥ (generated + 1)·n`;
-one per call. Codes look like `REWARD-0005-K7QP` (unique by milestone, random suffix without look-alike
-characters), matched case-insensitively.
+one per call. Codes look like `REWARD-0005-K7QPX9MZ2A`: unique by milestone, plus a 10-character random suffix
+(about 50 bits, no look-alike characters) so codes cannot practically be guessed, matched case-insensitively.
+As a second line of defence, a client that tries 10 unknown codes within 15 minutes gets `429` on coupon
+checkouts until the window passes; checkouts without a coupon are never limited.
 
 **Why:** Deriving the next milestone from "coupons generated so far", under the write lock, makes duplicates
 impossible without any extra bookkeeping. There is no customer model, so a bearer code is the only coherent
@@ -259,8 +261,9 @@ repository boundaries are where a database would plug in.
 ## 5. Money and rounding
 
 - `BigDecimal`, scale 2, everywhere. Line total = `unitPrice × quantity` (exact).
-- Input: decimal strings with at most 2 decimals, up to 9,999,999.99; JSON numbers and extra decimals are
-  rejected, never rounded. Prices must be > 0.
+- Input: decimal strings with at most 2 decimals; JSON numbers and extra decimals are rejected, never
+  rounded. Product prices are 0.01–9,999,999.99; other amounts (`expectedSubtotal`) may be up to
+  999,999,999,999,999.99, so every cart that can be built can also be paid for.
 - Discount: `subtotal × percent / 100`, **HALF_UP** to the cent, then `min(discount, subtotal)`.
 - `total = subtotal − discount`, enforced by the `Order` constructor; therefore `0.00 ≤ total ≤ subtotal`.
 - Output: always strings with exactly two decimals.
@@ -268,11 +271,13 @@ repository boundaries are where a database would plug in.
 ## 6. Error model
 
 - One body for every failure: `{ code, message, details }`, including unknown routes, wrong methods, bad
-  media types and unexpected exceptions (which return `INTERNAL_ERROR` with no internals).
+  media types, Spring's own `/error` path and unexpected exceptions (which return `INTERNAL_ERROR` with no
+  internals). Errors are always JSON, whatever the `Accept` header asks for.
 - `code` is a stable enum (`ErrorCode`) clients branch on; the HTTP status groups them: **400** malformed
   input, **402** payment declined, **404** unknown ID (with a distinct code per resource), **409** a state
   conflict the client can resolve (stock, price, coupon used, cart closed, stale version), **422**
-  well-formed but unprocessable (empty cart, reused key).
+  well-formed but unprocessable (empty cart, reused key), **429** too many unknown coupon codes (with
+  `Retry-After`).
 - `details` is machine-readable: `fields` for validation, `shortages[]` for stock, both subtotals for a price
   change, `orderId` when a cart is already an order, `nextMilestone`/`placedOrders` for coupon generation.
 - Deliberately **no details** on `IDEMPOTENCY_KEY_REUSED`: echoing the earlier request would reveal another
@@ -290,7 +295,8 @@ repository boundaries are where a database would plug in.
 | Fake payment with a tested decline path | Real provider, payment outside the lock, refunds/cancellations |
 | Idempotency for checkout | Key expiry (TTL), "in progress" state, idempotency for admin coupon generation |
 | Optimistic version check for admin edits | Cart expiry/abandonment, stock reservation at add-to-cart |
-| 99 backend tests; small React frontend | Frontend tests, CI pipeline, load tests, rate limiting, observability |
+| Throttling of coupon-code guessing per client | General rate limiting, caps on carts and stored idempotency keys |
+| 117 backend tests; small React frontend | Frontend tests, CI pipeline, load tests, observability |
 
 ## 8. Multiple instances and production scale
 
@@ -379,14 +385,15 @@ be shown to fail against a broken implementation before they count.
 2. **PostgreSQL behind the same repositories** (Testcontainers), with the constraints in section 8, running
    the same concurrency tests against real transactions.
 3. **Idempotency hardening:** expiry, an `IN_PROGRESS` state, and idempotent admin coupon generation.
-4. **CI:** a GitHub Actions workflow running `./mvnw test`, the frontend build and lint on every PR, plus an
-   HTTP-level concurrency smoke test.
+4. **CI:** a GitHub Actions workflow running `./mvnw test`, the frontend build and lint on every PR.
 
 ## 11. Testing approach
 
-- **99 backend tests:**
+- **117 backend tests:**
   - service-level rules and concurrency in plain JUnit (fast, no Spring);
-  - HTTP-contract tests with MockMvc for status codes, error bodies, headers and CORS.
+  - HTTP-contract tests with MockMvc for status codes, error bodies, headers and CORS;
+  - HTTP concurrency tests against the real server (`HttpConcurrencyTest`): overselling, simultaneous
+    same-key retries and a coupon race, sent through Tomcat from 20 client threads at once.
 - **Concurrency tests** start all threads on one latch so the requests really overlap, then assert totals:
   orders, stock, charges, coupon state.
 - **Tests checked against broken code:**
@@ -398,8 +405,17 @@ be shown to fail against a broken implementation before they count.
   | coupon redeemed before payment | "failed checkout keeps the coupon" fails |
   | banker's rounding instead of HALF_UP | rounding test fails |
   | report read lock removed | only the deterministic test caught it (above) |
+  | write lock disabled, HTTP tests only | coupon race failed 2/2 runs, oversell 1/2, same-key retries 0/2: real HTTP timing makes races harder to hit, so the service-level tests remain the reliable guard |
+  | error responses negotiated instead of forced to JSON | the `Accept: application/xml` tests fail |
 
 - **Flakiness:** all 72 service tests run 20 times back to back gave 1,440 executions with 0 failures.
+- **Senior review before submission:** a full review of the codebase found five defects, each fixed with a
+  regression test:
+  - carts worth more than 9,999,999.99 could not be checked out;
+  - a non-JSON `Accept` header turned errors into 500s;
+  - `/error` used a different body;
+  - coupon codes were guessable (4 random characters, no throttling);
+  - no automated HTTP-level concurrency test.
 - **Live runs:**
   - Over HTTP: 20 parallel checkouts for 3 watches gave 3 orders; 20 same-key retries gave 1 order and
     19 replays; 10 parallel uses of one coupon gave 1 success.

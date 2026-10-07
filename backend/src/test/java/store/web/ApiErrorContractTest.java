@@ -20,6 +20,7 @@ import store.error.ErrorCode;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -102,6 +103,29 @@ class ApiErrorContractTest {
     }
 
     @Test
+    void errorsAreJsonEvenWhenTheClientAsksForXml() throws Exception {
+        mvc.perform(get("/test/conflict").accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isConflict())
+                .andExpect(header().string("Content-Type", startsWith("application/json")))
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_STOCK"));
+    }
+
+    @Test
+    void unsupportedAcceptHeaderIsAJson406() throws Exception {
+        mvc.perform(get("/test/ok").accept(MediaType.APPLICATION_XML))
+                .andExpect(status().isNotAcceptable())
+                .andExpect(jsonPath("$.code").value("NOT_ACCEPTABLE"));
+    }
+
+    @Test
+    void theErrorEndpointUsesTheSameBody() throws Exception {
+        mvc.perform(get("/error"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.details").isMap());
+    }
+
+    @Test
     void corsRejectsUnknownOrigin() throws Exception {
         mvc.perform(options("/test/validated")
                         .header("Origin", "http://evil.example")
@@ -126,6 +150,11 @@ class ApiErrorContractTest {
 
             @PostMapping("/test/validated")
             void validated(@Valid @RequestBody Body body) {
+            }
+
+            @GetMapping("/test/ok")
+            Map<String, String> ok() {
+                return Map.of("status", "ok");
             }
 
             @GetMapping("/test/boom")

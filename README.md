@@ -18,7 +18,8 @@ Approximate time spent: **~6 hours**.
 - Immutable orders that explain their own totals; exact money arithmetic (`BigDecimal`, sent as strings)
 - Reward coupons: generated per milestone by an admin, single use, never consumed by a failed checkout
 - Admin: product price/stock edits (version-checked), coupon generation and listing, order listing, sales report
-- 99 automated tests, including concurrency tests for every invariant that competing requests could break
+- 117 automated tests, including concurrency tests for every invariant that competing requests could break,
+  run both against the services and over real HTTP
 
 ## Requirements
 
@@ -51,7 +52,7 @@ Data lives in memory: restarting the backend resets it to the seed data.
 
 ```bash
 cd backend
-./mvnw test                   # 99 tests: unit, concurrency and HTTP-contract tests
+./mvnw test                   # 117 tests: unit, concurrency, HTTP-contract and HTTP concurrency tests
 ```
 
 ```bash
@@ -70,6 +71,8 @@ environment variables:
 | `store.rewards.n` | `5` | `STORE_REWARDS_N` | every n-th placed order earns a coupon (≥ 1) |
 | `store.rewards.x` | `10` | `STORE_REWARDS_X` | coupon discount in percent (1–100) |
 | `store.seed.enabled` | `true` | `STORE_SEED_ENABLED` | load the demo catalogue at startup |
+| `store.coupon-guessing.max-failed-attempts` | `10` | `STORE_COUPONGUESSING_MAXFAILEDATTEMPTS` | unknown coupon codes one client (IP) may try per window before its coupon checkouts get `429` |
+| `store.coupon-guessing.window` | `15m` | `STORE_COUPONGUESSING_WINDOW` | length of that window |
 | `store.cors.allowed-origins` | `http://localhost:5173` | — | origins allowed to call the API from a browser |
 
 Invalid values (for example `n = 0`) stop the backend at startup rather than failing later.

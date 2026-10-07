@@ -15,6 +15,7 @@ import java.util.Map;
 public class CatalogService {
 
     static final int MAX_STOCK = 1_000_000;
+    static final BigDecimal MAX_PRICE = new BigDecimal("9999999.99");
 
     private final ProductRepository products;
     private final StoreLock lock;
@@ -75,9 +76,9 @@ public class CatalogService {
 
     private static BigDecimal parsePositivePrice(String unitPrice) {
         BigDecimal price = Money.parse(unitPrice, "unitPrice");
-        if (price.signum() <= 0) {
+        if (price.signum() <= 0 || price.compareTo(MAX_PRICE) > 0) {
             throw new ApiException(ErrorCode.VALIDATION_ERROR, "Invalid amount for 'unitPrice'",
-                    Map.of("fields", Map.of("unitPrice", "must be greater than 0")));
+                    Map.of("fields", Map.of("unitPrice", "must be between 0.01 and " + MAX_PRICE.toPlainString())));
         }
         return price;
     }

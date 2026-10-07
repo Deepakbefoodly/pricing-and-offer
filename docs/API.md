@@ -7,6 +7,8 @@ Base URL: `http://localhost:8080`. All request and response bodies are JSON.
 **Money** is always a JSON **string** with exactly two decimals, in both directions: `"25.00"`, never `25`
 or `25.0`. A JSON number in a money field is rejected (`400`), and so is an amount with more than two
 decimals; nothing is rounded silently. Inputs may omit trailing zeros (`"27.5"` is read as `27.50`).
+Product prices are 0.01–9,999,999.99; other amounts (such as `expectedSubtotal`) may be up to
+999,999,999,999,999.99, so any cart the store lets you build can be checked out.
 
 **Errors** always have the same shape. `code` is stable and meant for programs to branch on; `message` is
 for humans; `details` holds machine-readable context and may be empty.
@@ -25,6 +27,9 @@ Validation errors name the offending fields in `details.fields`:
 { "code": "VALIDATION_ERROR", "message": "Invalid quantity",
   "details": { "fields": { "quantity": "must be between 1 and 99" } } }
 ```
+
+**Always JSON.** Every response, including every error, is `application/json`, whatever the `Accept`
+header says; a request that only accepts other types gets `406 NOT_ACCEPTABLE`.
 
 **Strict input.** Unknown JSON fields, wrong types (`"5"` for a number, `27.5` for a money string) and
 fractions for whole numbers (`1.5` for a quantity) are rejected with `400 VALIDATION_ERROR`.
@@ -49,6 +54,7 @@ Browsers can read the `Location` and `Idempotent-Replayed` response headers (exp
 | `ORDER_NOT_FOUND` | 404 | Unknown order ID |
 | `COUPON_NOT_FOUND` | 404 | Unknown coupon code |
 | `METHOD_NOT_ALLOWED` | 405 | Wrong HTTP method for this path |
+| `NOT_ACCEPTABLE` | 406 | The `Accept` header excludes `application/json` |
 | `PRODUCT_MODIFIED` | 409 | Admin edit based on an outdated product version; reload and retry |
 | `CART_NOT_OPEN` | 409 | Cart was checked out and can no longer change |
 | `CART_ALREADY_CHECKED_OUT` | 409 | New checkout attempt on a cart that already became an order; `details.orderId` |
@@ -59,6 +65,7 @@ Browsers can read the `Location` and `Idempotent-Replayed` response headers (exp
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | Body is not `application/json` |
 | `CART_EMPTY` | 422 | Checkout of a cart with no items |
 | `IDEMPOTENCY_KEY_REUSED` | 422 | Same key sent with a different request |
+| `RATE_LIMITED` | 429 | Too many unknown coupon codes from this client; `Retry-After` header and `details.retryAfterSeconds` |
 | `INTERNAL_ERROR` | 500 | Unexpected failure; no internal details are exposed |
 
 ## Resources
@@ -94,7 +101,7 @@ below the cart quantity after the item was added (checkout would be refused).
   "id": "ord_51ad…", "orderNumber": 6, "cartId": "cart_8f2c41…",
   "lines": [{ "productId": "shirt", "name": "Shirt", "unitPrice": "25.00", "quantity": 2, "lineTotal": "50.00" }],
   "subtotal": "50.00",
-  "coupon": { "code": "REWARD-0005-K7QP", "percentOff": 10 },
+  "coupon": { "code": "REWARD-0005-K7QPX9MZ2A", "percentOff": 10 },
   "discount": "5.00", "total": "45.00",
   "placedAt": "2026-10-07T10:15:30Z"
 }
@@ -106,7 +113,7 @@ below the cart quantity after the item was added (checkout would be refused).
 
 ```json
 {
-  "code": "REWARD-0005-K7QP", "percentOff": 10, "milestoneOrderNumber": 5, "status": "AVAILABLE",
+  "code": "REWARD-0005-K7QPX9MZ2A", "percentOff": 10, "milestoneOrderNumber": 5, "status": "AVAILABLE",
   "generatedAt": "2026-10-07T11:00:00Z", "redeemedByOrderId": null, "redeemedAt": null
 }
 ```
@@ -208,7 +215,7 @@ Headers:
 Body:
 
 ```json
-{ "expectedSubtotal": "50.00", "couponCode": "REWARD-0005-K7QP" }
+{ "expectedSubtotal": "50.00", "couponCode": "REWARD-0005-K7QPX9MZ2A" }
 ```
 
 | Field | Required | Meaning |
@@ -237,6 +244,7 @@ Errors. Request-format problems (400) are reported first; the business rules aft
 | 409 | `PRICE_CHANGED` | `details.expectedSubtotal` vs `details.currentSubtotal` |
 | 404 | `COUPON_NOT_FOUND` | unknown coupon |
 | 409 | `COUPON_ALREADY_REDEEMED` | coupon already used |
+| 429 | `RATE_LIMITED` | this client sent too many unknown coupon codes recently (default: 10 per 15 minutes); checkouts **without** a coupon are never limited |
 | 402 | `PAYMENT_FAILED` | payment declined (`details.reason`). The built-in fake payment always approves, so this is exercised by tests only. |
 
 Any failure leaves stock, cart, coupon and orders unchanged; only a successful checkout is remembered for
@@ -270,7 +278,7 @@ they are. Stock is set as an absolute value.
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `VALIDATION_ERROR` | `version` missing; neither field given; price ≤ 0 or more than 2 decimals; stock < 0 or > 1,000,000 |
+| 400 | `VALIDATION_ERROR` | `version` missing; neither field given; price outside 0.01–9,999,999.99 or more than 2 decimals; stock < 0 or > 1,000,000 |
 | 404 | `PRODUCT_NOT_FOUND` | unknown product |
 | 409 | `PRODUCT_MODIFIED` | the product changed since that version (another edit or a sale); `details.currentVersion` |
 
