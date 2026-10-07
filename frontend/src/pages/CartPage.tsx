@@ -14,6 +14,8 @@ export default function CartPage() {
   const navigate = useNavigate()
   // Why the last checkout was refused when the customer has to act on it (new prices, too little stock).
   const [checkoutProblem, setCheckoutProblem] = useState<ApiError | null>(null)
+  const [couponCode, setCouponCode] = useState('')
+  const [couponProblem, setCouponProblem] = useState<ApiError | null>(null)
 
   const attempt = async (action: () => Promise<unknown>) => {
     setCheckoutProblem(null)
@@ -26,8 +28,9 @@ export default function CartPage() {
 
   async function placeOrder(expectedSubtotal: string) {
     setCheckoutProblem(null)
+    setCouponProblem(null)
     try {
-      const { order, replayed, request } = await checkout(expectedSubtotal)
+      const { order, replayed, request } = await checkout(expectedSubtotal, couponCode.trim() || undefined)
       // A replay here means a lost response was retried automatically; to the shopper it is simply placed.
       toast.success(`Order #${order.orderNumber} placed${replayed ? ' (confirmed after a retry)' : ''}`)
       // Pass the request along so the order page can demonstrate a safe retry.
@@ -36,6 +39,8 @@ export default function CartPage() {
       const apiError = toApiError(e)
       if (apiError.code === 'PRICE_CHANGED' || apiError.code === 'INSUFFICIENT_STOCK') {
         setCheckoutProblem(apiError) // the cart has been reloaded with current prices and stock
+      } else if (apiError.code === 'COUPON_NOT_FOUND' || apiError.code === 'COUPON_ALREADY_REDEEMED') {
+        setCouponProblem(apiError) // nothing was charged; fix or clear the code and try again
       } else if (apiError.code === 'CART_ALREADY_CHECKED_OUT' && typeof apiError.details.orderId === 'string') {
         toast.error(apiError) // e.g. checked out from another tab: show the order it became
         navigate(`/orders/${apiError.details.orderId}`)
@@ -132,9 +137,24 @@ export default function CartPage() {
             </div>
           )}
 
-          <div className="mt-4 flex items-center justify-end gap-3">
-            <span className="text-sm text-slate-600">
-              You pay <span className="font-mono font-medium text-slate-900">{cart.subtotal}</span>
+          <div className="mt-4 flex flex-wrap items-start justify-end gap-3">
+            <label className="text-sm text-slate-600">
+              <span className="sr-only">Coupon code</span>
+              <input
+                value={couponCode}
+                onChange={(e) => {
+                  setCouponCode(e.target.value)
+                  setCouponProblem(null)
+                }}
+                placeholder="Coupon code (optional)"
+                autoComplete="off"
+                className="w-56 rounded border border-slate-300 px-2 py-1.5 font-mono text-sm uppercase placeholder:normal-case placeholder:font-sans"
+              />
+              {couponProblem && <span className="mt-1 block max-w-56 text-xs text-red-700">{couponProblem.message}</span>}
+            </label>
+            <span className="py-1.5 text-sm text-slate-600">
+              {couponCode.trim() ? 'Subtotal before coupon ' : 'You pay '}
+              <span className="font-mono font-medium text-slate-900">{cart.subtotal}</span>
             </span>
             <button
               type="button"
